@@ -203,10 +203,6 @@ interface AppConfig {
 - Animations minimales — transitions CSS courtes (150ms) pour les changements de statut
 - Sidebar : largeur fixe ~280px, collapsible
 
-## Backlog
-
-Le fichier `CLAUDE_CODE_DASHBOARD_BACKLOG.md` contient toutes les user stories et tasks. Suivre l'ordre d'implémentation indiqué en fin de fichier.
-
 ## Ce qu'il ne faut PAS faire
 
 - Ne pas utiliser `child_process.spawn` directement — toujours passer par `node-pty` pour avoir un vrai PTY

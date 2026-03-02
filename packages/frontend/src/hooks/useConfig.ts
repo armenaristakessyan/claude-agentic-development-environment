@@ -21,9 +21,25 @@ export function useConfig() {
     }
   }, []);
 
+  const updateConfig = useCallback(async (updates: Partial<AppConfig>) => {
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      const data = await res.json() as AppConfig;
+      setConfig(data);
+      return data;
+    } catch (err) {
+      console.error('Failed to update config:', err);
+      throw err;
+    }
+  }, []);
+
   useEffect(() => {
     fetchConfig();
   }, [fetchConfig]);
 
-  return { config, refetch: fetchConfig };
+  return { config, updateConfig, refetch: fetchConfig };
 }

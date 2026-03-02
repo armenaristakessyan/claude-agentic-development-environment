@@ -1,20 +1,23 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { Terminal } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import TerminalView from './components/TerminalView';
 import AttentionQueueBanner from './components/AttentionQueueBanner';
 import ContextBanner from './components/ContextBanner';
+import ScanPathsModal from './components/ScanPathsModal';
 import { useProjects } from './hooks/useProjects';
 import { useInstances } from './hooks/useInstances';
 import { useConfig } from './hooks/useConfig';
 import { useAttentionQueue } from './hooks/useAttentionQueue';
 
 export default function App() {
-  const { config } = useConfig();
+  const { config, updateConfig } = useConfig();
   const { projects, loading: projectsLoading, refreshing: projectsRefreshing, refreshProjects, deleteWorktree } = useProjects();
   const { instances, spawnInstance, killInstance } = useInstances();
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
   const [typingLocked, setTypingLocked] = useState(false);
+  const [scanPathsOpen, setScanPathsOpen] = useState(false);
+  const autoOpenedRef = useRef(false);
 
   const { queue, skipInstance, jumpToInstance } = useAttentionQueue({
     instances,
@@ -69,6 +72,23 @@ export default function App() {
     setTypingLocked(typing);
   }, []);
 
+  const handleSaveScanPaths = useCallback(async (paths: string[]) => {
+    try {
+      await updateConfig({ scanPaths: paths });
+      refreshProjects();
+      setScanPathsOpen(false);
+    } catch {
+      // Error already logged in hook
+    }
+  }, [updateConfig, refreshProjects]);
+
+  useEffect(() => {
+    if (!projectsLoading && projects.length === 0 && !autoOpenedRef.current) {
+      autoOpenedRef.current = true;
+      setScanPathsOpen(true);
+    }
+  }, [projectsLoading, projects.length]);
+
   const selectedInstance = instances.find(i => i.id === selectedInstanceId);
 
   return (
@@ -86,6 +106,7 @@ export default function App() {
         onSelectInstance={setSelectedInstanceId}
         onKillInstance={handleKill}
         onDeleteWorktree={handleDeleteWorktree}
+        onOpenScanPaths={() => setScanPathsOpen(true)}
       />
 
       {/* Main content */}
@@ -155,6 +176,14 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {scanPathsOpen && (
+        <ScanPathsModal
+          scanPaths={config?.scanPaths ?? []}
+          onSave={handleSaveScanPaths}
+          onClose={() => setScanPathsOpen(false)}
+        />
+      )}
     </div>
   );
 }

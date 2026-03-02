@@ -1,4 +1,4 @@
-import { RefreshCw, FolderOpen, Zap, ChevronDown, ChevronRight } from 'lucide-react';
+import { RefreshCw, FolderOpen, Zap, ChevronDown, ChevronRight, Settings } from 'lucide-react';
 import { useState } from 'react';
 import ProjectList from './ProjectList';
 import InstanceList from './InstanceList';
@@ -17,6 +17,7 @@ interface SidebarProps {
   onSelectInstance: (id: string) => void;
   onKillInstance: (id: string, deleteWorktree?: boolean) => void;
   onDeleteWorktree: (projectPath: string, worktreePath: string) => void;
+  onOpenScanPaths: () => void;
 }
 
 function shortenPath(fullPath: string): string {
@@ -37,6 +38,7 @@ export default function Sidebar({
   onSelectInstance,
   onKillInstance,
   onDeleteWorktree,
+  onOpenScanPaths,
 }: SidebarProps) {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [instancesOpen, setInstancesOpen] = useState(true);
@@ -103,6 +105,13 @@ export default function Sidebar({
               <span className="ml-auto rounded-full bg-neutral-800 px-1.5 py-0.5 text-[10px] font-medium text-neutral-400">
                 {projects.length}
               </span>
+            </button>
+            <button
+              onClick={onOpenScanPaths}
+              className="rounded p-1 text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-neutral-300"
+              title="Scan paths settings"
+            >
+              <Settings className="h-3 w-3" />
             </button>
             <button
               onClick={onRefreshProjects}
