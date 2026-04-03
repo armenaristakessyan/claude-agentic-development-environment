@@ -44,7 +44,7 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2 text-neutral-200">
             <Play className="h-4 w-4 text-green-400" />
-            <span className="text-sm font-semibold">Launch {project.name}</span>
+            <span className="text-sm font-semibold">Launch new space</span>
           </div>
           <button
             onClick={onClose}
@@ -61,7 +61,7 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
             value={taskDescription}
             onChange={e => setTaskDescription(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="What's the task?"
+            placeholder="What would you like to work on?"
             className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500 outline-none focus:border-neutral-500 focus:ring-1 focus:ring-neutral-500"
           />
           <p className="mt-1.5 text-[11px] text-neutral-500">
