@@ -93,22 +93,6 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-[#0a0a0a]">
-      <Sidebar
-        projects={projects}
-        projectsLoading={projectsLoading}
-        projectsRefreshing={projectsRefreshing}
-        instances={instances}
-        selectedInstanceId={selectedInstanceId}
-        scanPaths={config?.scanPaths ?? []}
-        queuedIds={queuedIds}
-        onRefreshProjects={refreshProjects}
-        onLaunchProject={handleLaunch}
-        onSelectInstance={setSelectedInstanceId}
-        onKillInstance={handleKill}
-        onDeleteWorktree={handleDeleteWorktree}
-        onOpenScanPaths={() => setScanPathsOpen(true)}
-      />
-
       {/* Main content */}
       <main className="flex flex-1 flex-col overflow-hidden">
         {/* Topbar */}
@@ -176,6 +160,22 @@ export default function App() {
           )}
         </div>
       </main>
+
+      <Sidebar
+        projects={projects}
+        projectsLoading={projectsLoading}
+        projectsRefreshing={projectsRefreshing}
+        instances={instances}
+        selectedInstanceId={selectedInstanceId}
+        scanPaths={config?.scanPaths ?? []}
+        queuedIds={queuedIds}
+        onRefreshProjects={refreshProjects}
+        onLaunchProject={handleLaunch}
+        onSelectInstance={setSelectedInstanceId}
+        onKillInstance={handleKill}
+        onDeleteWorktree={handleDeleteWorktree}
+        onOpenScanPaths={() => setScanPathsOpen(true)}
+      />
 
       {scanPathsOpen && (
         <ScanPathsModal

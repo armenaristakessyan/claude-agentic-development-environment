@@ -1,4 +1,4 @@
-import { RefreshCw, FolderOpen, Zap, ChevronDown, ChevronRight, Settings } from 'lucide-react';
+import { RefreshCw, FolderOpen, ChevronDown, ChevronRight, Settings } from 'lucide-react';
 import { useState } from 'react';
 import ProjectList from './ProjectList';
 import InstanceList from './InstanceList';
@@ -48,13 +48,11 @@ export default function Sidebar({
   const waitingCount = instances.filter(i => i.status === 'waiting_input').length;
 
   return (
-    <aside className="flex h-full w-[280px] shrink-0 flex-col border-r border-neutral-800 bg-[#0f0f0f]">
+    <aside className="flex h-full w-[280px] shrink-0 flex-col border-l border-neutral-800 bg-[#0f0f0f]">
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-neutral-800 px-4 py-3">
-        <div className="flex h-6 w-6 items-center justify-center rounded bg-gradient-to-br from-orange-500 to-amber-600">
-          <Zap className="h-3.5 w-3.5 text-white" />
-        </div>
-        <span className="text-sm font-semibold text-neutral-200">Claude Dashboard</span>
+        <img src="/favicon.png" alt="Logo" className="h-6 w-6 rounded invert" />
+        <span className="text-sm font-semibold text-neutral-200">Claude ADE</span>
       </div>
 
       {/* Content */}
