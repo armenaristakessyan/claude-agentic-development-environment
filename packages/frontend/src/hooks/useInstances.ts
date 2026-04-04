@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { Instance, InstanceStatus, InstanceContext } from '../types';
+import type { Instance, InstanceStatus } from '../types';
 import { useSocket } from './useSocket';
 
 export function useInstances() {
@@ -41,11 +41,18 @@ export function useInstances() {
       );
     };
 
-    const handleContext = ({ instanceId, taskDescription, lastUserPrompt }: InstanceContext) => {
+    const handleResult = ({ instanceId, costUsd, totalInputTokens, totalOutputTokens }: {
+      instanceId: string; costUsd: number; totalInputTokens: number; totalOutputTokens: number;
+    }) => {
       setInstances(prev =>
         prev.map(inst =>
           inst.id === instanceId
-            ? { ...inst, taskDescription, lastUserPrompt }
+            ? {
+                ...inst,
+                totalCostUsd: inst.totalCostUsd + (costUsd ?? 0),
+                totalInputTokens: totalInputTokens ?? inst.totalInputTokens,
+                totalOutputTokens: totalOutputTokens ?? inst.totalOutputTokens,
+              }
             : inst,
         ),
       );
@@ -53,12 +60,12 @@ export function useInstances() {
 
     socket.on('instance:status', handleStatus);
     socket.on('instance:exited', handleExited);
-    socket.on('instance:context', handleContext);
+    socket.on('chat:result', handleResult);
 
     return () => {
       socket.off('instance:status', handleStatus);
       socket.off('instance:exited', handleExited);
-      socket.off('instance:context', handleContext);
+      socket.off('chat:result', handleResult);
     };
   }, [socket]);
 

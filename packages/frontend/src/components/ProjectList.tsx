@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useRef } from 'react';
-import { Play, GitBranch, FileText, Search, FolderGit2, Loader2, Folder, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
+import { Play, GitBranch, FileText, Search, Loader2, Folder, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import type { Project, Instance } from '../types';
 import LaunchModal from './LaunchModal';
 
@@ -125,7 +125,6 @@ export default function ProjectList({ projects, instances, loading, scanPaths, s
     [instances],
   );
 
-  // Separate worktrees from regular projects for tree nesting
   const worktreesByParent = useMemo(() => {
     const map = new Map<string, Project[]>();
     for (const p of projects) {
@@ -150,7 +149,6 @@ export default function ProjectList({ projects, instances, loading, scanPaths, s
     return buildMultiRootTree(regularProjects, scanPaths);
   }, [regularProjects, scanPaths, selectedRoot]);
 
-  // Auto-expand first level only on initial mount or when selectedRoot changes
   const prevRootRef = useRef<string | null | undefined>(undefined);
   if (prevRootRef.current !== selectedRoot) {
     prevRootRef.current = selectedRoot;
@@ -199,7 +197,6 @@ export default function ProjectList({ projects, instances, loading, scanPaths, s
     setTimeout(() => setLaunching(null), 1000);
   }, [onLaunch]);
 
-  // Filtered flat list for search — includes all projects
   const filtered = useMemo(() => {
     if (!filter) return null;
     return projects.filter(p =>
@@ -210,28 +207,28 @@ export default function ProjectList({ projects, instances, loading, scanPaths, s
   }, [projects, filter]);
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="relative">
-        <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-neutral-500" />
+    <div className="flex flex-col gap-1">
+      {/* Search — subtle, borderless */}
+      <div className="relative px-1">
+        <Search className="absolute left-3 top-2 h-3.5 w-3.5 text-neutral-600" />
         <input
           type="text"
-          placeholder="Filter projects..."
+          placeholder="Search..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          className="w-full rounded-md border border-neutral-800 bg-neutral-900/50 py-2 pl-8 pr-3 text-xs text-neutral-300 placeholder-neutral-600 outline-none focus:border-neutral-600 focus:ring-1 focus:ring-neutral-600"
+          className="w-full rounded bg-transparent py-1.5 pl-7 pr-3 text-[12px] text-neutral-400 placeholder-neutral-600 outline-none transition-colors focus:bg-neutral-900/50"
         />
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-6 text-neutral-500">
+        <div className="flex items-center justify-center py-8 text-neutral-600">
           <Loader2 className="h-4 w-4 animate-spin" />
         </div>
       ) : filtered ? (
-        // Flat search results
         filtered.length === 0 ? (
-          <p className="py-4 text-center text-xs text-neutral-600">No projects match</p>
+          <p className="py-6 text-center text-[12px] text-neutral-600">No projects match</p>
         ) : (
-          <div className="flex flex-col gap-0.5">
+          <div className="flex flex-col">
             {filtered.map(project => {
               const isNestedWt = project.isWorktree && !!project.parentProject;
               return (
@@ -254,10 +251,9 @@ export default function ProjectList({ projects, instances, loading, scanPaths, s
           </div>
         )
       ) : tree.length === 0 ? (
-        <p className="py-4 text-center text-xs text-neutral-600">No projects found</p>
+        <p className="py-6 text-center text-[12px] text-neutral-600">No projects found</p>
       ) : (
-        // Tree view
-        <div className="flex flex-col gap-0.5">
+        <div className="flex flex-col">
           <TreeNodeList
             nodes={tree}
             depth={0}
@@ -355,17 +351,16 @@ function FolderRow({
     <>
       <button
         onClick={() => treeProps.onToggle(node.fullPath)}
-        className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-neutral-800/50"
-        style={{ paddingLeft: `${depth * 12 + 6}px` }}
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-neutral-800/30"
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         {isExpanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 text-neutral-500" />
+          <ChevronDown className="h-3 w-3 shrink-0 text-neutral-600" />
         ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 text-neutral-500" />
+          <ChevronRight className="h-3 w-3 shrink-0 text-neutral-600" />
         )}
-        <Folder className={`h-3.5 w-3.5 shrink-0 ${isExpanded ? 'text-amber-500/70' : 'text-neutral-500'}`} />
-        <span className="truncate text-xs font-medium text-neutral-400">{node.name}</span>
-        <span className="ml-auto shrink-0 text-[10px] text-neutral-600">{node.projectCount}</span>
+        <Folder className={`h-3.5 w-3.5 shrink-0 ${isExpanded ? 'text-neutral-400' : 'text-neutral-500'}`} />
+        <span className="truncate text-[13px] text-neutral-400">{node.name}</span>
       </button>
 
       {isExpanded && (
@@ -379,7 +374,7 @@ function FolderRow({
   );
 }
 
-// --- Project row (with nested worktrees) ---
+// --- Project row ---
 
 function ProjectRow({
   project,
@@ -411,13 +406,15 @@ function ProjectRow({
   return (
     <>
       <div
-        className="group flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-neutral-800/50"
-        style={{ paddingLeft: `${depth * 12 + 6}px` }}
+        className={`group flex items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-neutral-800/30 ${
+          isActive ? 'bg-blue-500/8' : ''
+        }`}
+        style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         {hasWorktrees ? (
           <button
             onClick={e => { e.stopPropagation(); onToggleWorktrees(); }}
-            className="shrink-0 text-neutral-500 hover:text-neutral-300"
+            className="shrink-0 text-neutral-600 hover:text-neutral-400"
           >
             {isProjectExpanded
               ? <ChevronDown className="h-3 w-3" />
@@ -427,36 +424,18 @@ function ProjectRow({
           <span className="w-3 shrink-0" />
         )}
 
-        <FolderGit2 className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
-
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-xs font-medium text-neutral-200">
+          <div className="flex items-center gap-2">
+            <span className={`truncate text-[13px] ${isActive ? 'text-neutral-200' : 'text-neutral-400'}`}>
               {project.name}
             </span>
             {project.hasClaudeMd && (
-              <span title="Has CLAUDE.md"><FileText className="h-3 w-3 shrink-0 text-amber-500/70" /></span>
+              <span title="Has CLAUDE.md"><FileText className="h-3 w-3 shrink-0 text-neutral-600" /></span>
             )}
             {project.isWorktree && (
-              <span className="shrink-0 rounded bg-violet-500/10 px-1 py-0.5 text-[9px] font-medium text-violet-400">
-                WT
-              </span>
-            )}
-            {hasWorktrees && (
-              <span className="shrink-0 rounded bg-violet-500/10 px-1 py-0.5 text-[9px] font-medium text-violet-400">
-                {worktrees.length} wt
-              </span>
-            )}
-            {isActive && (
-              <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
+              <span className="shrink-0 text-[10px] text-neutral-600">wt</span>
             )}
           </div>
-          {project.gitBranch && (
-            <div className="flex items-center gap-1 text-[10px] text-neutral-500">
-              <GitBranch className="h-2.5 w-2.5" />
-              <span className="truncate">{project.gitBranch}</span>
-            </div>
-          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-0.5">
@@ -466,7 +445,7 @@ function ProjectRow({
                 e.stopPropagation();
                 onDeleteWorktree(project.parentProject!, project.path);
               }}
-              className="shrink-0 rounded p-1 text-neutral-500 opacity-0 transition-all hover:bg-neutral-700 hover:text-red-400 group-hover:opacity-100"
+              className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
               title="Delete worktree"
             >
               <Trash2 className="h-3 w-3" />
@@ -475,7 +454,7 @@ function ProjectRow({
           <button
             onClick={onLaunch}
             disabled={isLaunching}
-            className="shrink-0 rounded p-1 text-neutral-500 opacity-0 transition-all hover:bg-neutral-700 hover:text-green-400 group-hover:opacity-100 disabled:opacity-50"
+            className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-neutral-300 group-hover:opacity-100 disabled:opacity-50"
             title="Launch Claude Code"
           >
             {isLaunching ? (
@@ -518,18 +497,18 @@ function WorktreeRow({
 }) {
   return (
     <div
-      className="group flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors hover:bg-neutral-800/50"
-      style={{ paddingLeft: `${depth * 12 + 6}px` }}
+      className="group flex items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-neutral-800/30"
+      style={{ paddingLeft: `${depth * 16 + 8}px` }}
     >
-      <GitBranch className="h-3 w-3 shrink-0 text-violet-400" />
-      <span className="min-w-0 flex-1 truncate text-xs text-neutral-400">
+      <GitBranch className="h-3 w-3 shrink-0 text-neutral-600" />
+      <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-500">
         {worktree.gitBranch ?? worktree.name}
       </span>
 
       <div className="flex shrink-0 items-center gap-0.5">
         <button
           onClick={e => { e.stopPropagation(); onDelete(); }}
-          className="shrink-0 rounded p-1 text-neutral-500 opacity-0 transition-all hover:bg-neutral-700 hover:text-red-400 group-hover:opacity-100"
+          className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
           title="Delete worktree"
         >
           <Trash2 className="h-3 w-3" />
@@ -537,7 +516,7 @@ function WorktreeRow({
         <button
           onClick={onLaunch}
           disabled={isLaunching}
-          className="shrink-0 rounded p-1 text-neutral-500 opacity-0 transition-all hover:bg-neutral-700 hover:text-green-400 group-hover:opacity-100 disabled:opacity-50"
+          className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-neutral-300 group-hover:opacity-100 disabled:opacity-50"
           title="Launch in worktree"
         >
           {isLaunching ? (

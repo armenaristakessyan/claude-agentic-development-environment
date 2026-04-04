@@ -101,6 +101,7 @@ interface SpawnOptions {
   worktreePath?: string;
   parentProjectPath?: string;
   branchName?: string;
+  continueSession?: boolean;
 }
 
 interface PtyHandle {
@@ -138,9 +139,15 @@ export class ProcessManager extends EventEmitter {
     // Build a fresh env each time to avoid stale state after tsx watch reloads
     const env = buildPtyEnv();
 
-    console.log(`[process-manager] Spawning ${this.claudeBinary} in ${cwd}`);
+    const args: string[] = [];
+    if (options.continueSession) {
+      args.push('--continue');
+      console.log(`[process-manager] Spawning ${this.claudeBinary} --continue in ${cwd}`);
+    } else {
+      console.log(`[process-manager] Spawning ${this.claudeBinary} in ${cwd}`);
+    }
 
-    const ptyProcess = pty.spawn(this.claudeBinary, [], {
+    const ptyProcess = pty.spawn(this.claudeBinary, args, {
       name: 'xterm-256color',
       cols: 120,
       rows: 30,

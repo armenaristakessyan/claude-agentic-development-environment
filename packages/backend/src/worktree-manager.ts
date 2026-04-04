@@ -23,11 +23,13 @@ export class WorktreeManager {
   }
 
   slugify(text: string): string {
-    return text
+    // Take first 4 words max, then slugify to keep branch names short
+    const words = text.trim().split(/\s+/).slice(0, 4).join(' ');
+    return words
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-+|-+$/g, '')
-      .slice(0, 60);
+      .slice(0, 30);
   }
 
   createWorktree(projectPath: string, taskDescription: string): WorktreeResult {

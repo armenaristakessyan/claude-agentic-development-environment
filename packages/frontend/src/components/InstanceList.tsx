@@ -11,89 +11,56 @@ interface InstanceListProps {
 }
 
 const STATUS_COLORS: Record<InstanceStatus, string> = {
-  launching: 'bg-yellow-500',
   processing: 'bg-blue-500 animate-pulse',
   waiting_input: 'bg-green-500',
   idle: 'bg-neutral-500',
   exited: 'bg-red-500',
 };
 
-const STATUS_LABELS: Record<InstanceStatus, string> = {
-  launching: 'Launching',
-  processing: 'Processing',
-  waiting_input: 'Waiting',
-  idle: 'Idle',
-  exited: 'Exited',
-};
-
 export default function InstanceList({ instances, selectedId, queuedIds, onSelect, onKill }: InstanceListProps) {
-  // Build ordered array from queuedIds for position display
   const queuedArray = instances
     .filter(i => queuedIds.has(i.id))
     .map(i => i.id);
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null);
   const [deleteWorktreeChecked, setDeleteWorktreeChecked] = useState(false);
 
-  // Stable order: sort by creation date only (oldest first)
   const sorted = [...instances].sort((a, b) =>
     new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
   );
 
-  if (sorted.length === 0) {
-    return (
-      <p className="py-4 text-center text-xs text-neutral-600">
-        No active instances
-      </p>
-    );
-  }
+  if (sorted.length === 0) return null;
 
   const killTarget = instances.find(i => i.id === confirmKillId);
   const hasWorktree = killTarget?.worktreePath !== null && killTarget?.worktreePath !== undefined;
 
   return (
-    <div className="flex flex-col gap-0.5">
+    <div className="flex flex-col gap-px">
       {sorted.map(instance => {
         const isSelected = instance.id === selectedId;
-        const isWaiting = instance.status === 'waiting_input';
 
         return (
           <button
             key={instance.id}
             onClick={() => onSelect(instance.id)}
-            className={`group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
+            className={`group flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors ${
               isSelected
-                ? 'bg-neutral-800 ring-1 ring-neutral-700'
-                : 'hover:bg-neutral-800/50'
+                ? 'bg-blue-500/10'
+                : 'hover:bg-neutral-800/30'
             }`}
           >
             <div className="relative shrink-0">
-              <Terminal className="h-3.5 w-3.5 text-neutral-400" />
+              <Terminal className="h-3.5 w-3.5 text-neutral-500" />
               <span
-                className={`absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ${STATUS_COLORS[instance.status]}`}
+                className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ${STATUS_COLORS[instance.status]}`}
               />
             </div>
 
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <span className="truncate text-xs font-medium text-neutral-200">
-                  {instance.projectName}
-                </span>
-                {isWaiting && (
-                  <span className="shrink-0 rounded bg-green-500/10 px-1 py-0.5 text-[9px] font-medium text-green-400">
-                    INPUT
-                  </span>
-                )}
-                {queuedIds.has(instance.id) && (
-                  <span className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-medium text-amber-400">
-                    Q{queuedArray.indexOf(instance.id) + 1}
-                  </span>
-                )}
-              </div>
-              <span className="text-[10px] text-neutral-500">
-                {STATUS_LABELS[instance.status]}
+              <span className={`block truncate text-[13px] ${isSelected ? 'text-neutral-200' : 'text-neutral-400'}`}>
+                {instance.projectName}
               </span>
               {instance.taskDescription && (
-                <span className="block truncate text-[10px] text-neutral-500 italic">
+                <span className="block truncate text-[11px] text-neutral-600">
                   {instance.taskDescription}
                 </span>
               )}
@@ -106,10 +73,10 @@ export default function InstanceList({ instances, selectedId, queuedIds, onSelec
                   setConfirmKillId(instance.id);
                   setDeleteWorktreeChecked(false);
                 }}
-                className="shrink-0 rounded p-1 text-neutral-500 opacity-0 transition-all hover:bg-neutral-700 hover:text-red-400 group-hover:opacity-100"
+                className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
                 title="Kill instance"
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash2 className="h-3 w-3" />
               </button>
             )}
           </button>
@@ -118,35 +85,49 @@ export default function InstanceList({ instances, selectedId, queuedIds, onSelec
 
       {confirmKillId && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
           onClick={() => setConfirmKillId(null)}
         >
           <div
-            className="mx-4 w-full max-w-xs rounded-lg border border-neutral-700 bg-neutral-900 p-4 shadow-xl"
+            className="mx-4 w-full max-w-lg overflow-hidden rounded-xl border border-[#1e1e1e] bg-[#111111] shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
-            <div className="mb-3 flex items-center gap-2 text-red-400">
-              <Trash2 className="h-4 w-4" />
-              <span className="text-sm font-semibold">Kill instance</span>
+            {/* Header */}
+            <div className="border-b border-[#1e1e1e] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-500/10">
+                  <Trash2 className="h-4 w-4 text-gray-400" />
+                </div>
+                <div>
+                  <span className="block text-[14px] font-medium text-neutral-200">Kill Task</span>
+                  <span className="block text-[12px] text-neutral-600">{killTarget?.projectName}</span>
+                </div>
+              </div>
             </div>
-            <p className="mb-3 text-xs text-neutral-400">
-              Kill <span className="font-medium text-neutral-200">{killTarget?.projectName}</span>? The process will be terminated.
-            </p>
-            {hasWorktree && (
-              <label className="mb-3 flex items-center gap-2 text-xs text-neutral-400">
-                <input
-                  type="checkbox"
-                  checked={deleteWorktreeChecked}
-                  onChange={e => setDeleteWorktreeChecked(e.target.checked)}
-                  className="rounded border-neutral-600 bg-neutral-800"
-                />
-                Also delete worktree and branch
-              </label>
-            )}
-            <div className="flex justify-end gap-2">
+
+            {/* Body */}
+            <div className="px-5 py-4">
+              <p className="text-[13px] text-neutral-400">
+                This will terminate the running Claude instance.
+              </p>
+              {hasWorktree && (
+                <label className="mt-3 flex items-center gap-2.5 rounded-lg bg-[#0d0d0d] px-3 py-2.5 text-[12px] text-neutral-500">
+                  <input
+                    type="checkbox"
+                    checked={deleteWorktreeChecked}
+                    onChange={e => setDeleteWorktreeChecked(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-[#2a2a2a] bg-[#0d0d0d] accent-red-500"
+                  />
+                  Also delete worktree and branch
+                </label>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-2 border-t border-[#1e1e1e] px-5 py-3">
               <button
                 onClick={() => setConfirmKillId(null)}
-                className="rounded px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
+                className="rounded-lg px-4 py-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-300"
               >
                 Cancel
               </button>
@@ -155,7 +136,7 @@ export default function InstanceList({ instances, selectedId, queuedIds, onSelec
                   onKill(confirmKillId, hasWorktree ? deleteWorktreeChecked : undefined);
                   setConfirmKillId(null);
                 }}
-                className="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-500"
+                className="rounded-lg bg-red-600/80 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-red-500/80"
               >
                 Kill
               </button>

@@ -1,50 +1,64 @@
-# CLAUDE.md — Claude Code Dashboard
+# CLAUDE.md — Claude ADE
 
-## Projet
+## Project
 
-Dashboard web local pour orchestrer plusieurs instances Claude Code en parallèle. Permet de scanner des projets locaux, lancer des instances Claude Code dans des PTY, et interagir avec elles via des terminaux embarqués dans le navigateur.
+Claude ADE (Agentic Development Environment) is a local web dashboard for orchestrating multiple Claude Code instances in parallel. It scans local projects, spawns Claude Code instances in PTYs, and lets you interact with them via embedded terminals in the browser.
 
 ## Stack
 
-- **Monorepo** avec npm workspaces : `packages/backend` + `packages/frontend`
-- **Backend** : Node.js, TypeScript, Express, socket.io, node-pty
-- **Frontend** : React (Vite), TypeScript, Tailwind CSS, xterm.js, socket.io-client, lucide-react
-- **Cible** : macOS uniquement (node-pty + Xcode CLI tools)
+- **Monorepo** with npm workspaces: `packages/backend` + `packages/frontend`
+- **Backend**: Node.js, TypeScript, Express, socket.io, node-pty
+- **Frontend**: React (Vite), TypeScript, Tailwind CSS, xterm.js, socket.io-client, lucide-react
+- **Target**: macOS only (node-pty + Xcode CLI tools)
 
-## Commandes
+## Commands
 
-- `npm run dev` — lance backend + frontend en parallèle (concurrently)
-- `npm run dev:backend` — lance uniquement le backend (ts-node ou tsx)
-- `npm run dev:frontend` — lance uniquement le frontend (vite)
-- `npm run build` — build de production des deux packages
-- `npm run lint` — ESLint sur tout le monorepo
-- `npm run typecheck` — vérification TypeScript sans émission
+- `npm run dev` — start backend + frontend in parallel (concurrently)
+- `npm run dev:backend` — start backend only (ts-node / tsx)
+- `npm run dev:frontend` — start frontend only (vite)
+- `npm run build` — production build for both packages
+- `npm run lint` — ESLint across the monorepo
+- `npm run typecheck` — TypeScript check without emit
 
 ## Structure
 
 ```
-claude-dashboard/
+claude-agentic-development-environment/
 ├── CLAUDE.md
 ├── package.json                    # workspace root
 ├── packages/
 │   ├── backend/
 │   │   ├── src/
-│   │   │   ├── index.ts            # entry point Express + socket.io
-│   │   │   ├── config.ts           # lecture/écriture config ~/.claude-dashboard/config.json
-│   │   │   ├── scanner.ts          # ProjectScanner : détection projets + worktrees
-│   │   │   ├── process-manager.ts  # ProcessManager : spawn/kill PTY, lifecycle
-│   │   │   ├── status-monitor.ts   # StatusMonitor : parsing output PTY, détection état
-│   │   │   ├── routes.ts           # routes REST Express
-│   │   │   └── socket.ts          # handlers WebSocket socket.io
+│   │   │   ├── index.ts            # Express + socket.io entry point
+│   │   │   ├── config.ts           # read/write config ~/.claude-dashboard/config.json
+│   │   │   ├── scanner.ts          # ProjectScanner: project + worktree detection
+│   │   │   ├── process-manager.ts  # ProcessManager: spawn/kill PTY, lifecycle
+│   │   │   ├── status-monitor.ts   # StatusMonitor: PTY output parsing, status detection
+│   │   │   ├── worktree-manager.ts # WorktreeManager: git worktree create/delete
+│   │   │   ├── routes.ts           # Express REST routes
+│   │   │   └── socket.ts           # socket.io WebSocket handlers
 │   │   ├── package.json
 │   │   └── tsconfig.json
 │   └── frontend/
 │       ├── src/
 │       │   ├── App.tsx
 │       │   ├── main.tsx
-│       │   ├── components/         # composants React
-│       │   ├── hooks/              # custom hooks (useSocket, useInstances, etc.)
-│       │   └── types.ts            # types partagés frontend
+│       │   ├── components/
+│       │   │   ├── AttentionQueueBanner.tsx  # banner for instances needing attention
+│       │   │   ├── ContextBanner.tsx         # context/status banner
+│       │   │   ├── InstanceList.tsx          # list of active Claude instances
+│       │   │   ├── LaunchModal.tsx           # modal to spawn a new instance
+│       │   │   ├── ProjectList.tsx           # list of scanned projects
+│       │   │   ├── ScanPathsModal.tsx        # modal to edit scan paths
+│       │   │   ├── Sidebar.tsx               # right sidebar (projects + instances)
+│       │   │   └── TerminalView.tsx          # xterm.js terminal embed
+│       │   ├── hooks/
+│       │   │   ├── useAttentionQueue.ts      # queue of instances waiting for input
+│       │   │   ├── useConfig.ts              # read/update app config
+│       │   │   ├── useInstances.ts           # instance CRUD + socket events
+│       │   │   ├── useProjects.ts            # project list + worktree deletion
+│       │   │   └── useSocket.ts             # socket.io connection
+│       │   └── types.ts            # shared frontend types
 │       ├── index.html
 │       ├── package.json
 │       ├── tsconfig.json
@@ -53,17 +67,17 @@ claude-dashboard/
 └── README.md
 ```
 
-## Conventions de code
+## Code conventions
 
 ### TypeScript
 
-- Strict mode activé partout (`"strict": true`)
-- Pas de `any` — utiliser `unknown` + type guards si nécessaire
-- Interfaces pour les shapes de données, types pour les unions et utilitaires
-- Pas d'enums TypeScript — utiliser `as const` + type inféré
+- Strict mode everywhere (`"strict": true`)
+- No `any` — use `unknown` + type guards where needed
+- Interfaces for data shapes, types for unions and utilities
+- No TypeScript enums — use `as const` + inferred types
 
 ```typescript
-// Bon
+// Good
 const INSTANCE_STATUS = {
   LAUNCHING: 'launching',
   PROCESSING: 'processing',
@@ -73,28 +87,28 @@ const INSTANCE_STATUS = {
 } as const;
 type InstanceStatus = typeof INSTANCE_STATUS[keyof typeof INSTANCE_STATUS];
 
-// Mauvais
+// Bad
 enum InstanceStatus { LAUNCHING, PROCESSING }
 ```
 
-### Nommage
+### Naming
 
-- Fichiers : `kebab-case.ts` (ex: `process-manager.ts`, `TerminalView.tsx` pour les composants React)
-- Variables/fonctions : `camelCase`
-- Types/Interfaces : `PascalCase`
-- Constantes : `UPPER_SNAKE_CASE`
-- Composants React : `PascalCase` pour le fichier ET le composant
+- Files: `kebab-case.ts` (e.g. `process-manager.ts`, `TerminalView.tsx` for React components)
+- Variables/functions: `camelCase`
+- Types/Interfaces: `PascalCase`
+- Constants: `UPPER_SNAKE_CASE`
+- React components: `PascalCase` for both file and component name
 
 ### Backend
 
-- Chaque service est une classe avec injection des dépendances par constructeur
-- Les routes Express sont regroupées dans `routes.ts`, les handlers socket.io dans `socket.ts`
-- Les services émettent des événements via un EventEmitter interne pour le découplage
-- Gestion d'erreurs : try/catch explicite, jamais de promise non catchée
-- Logs via `console.log` avec préfixe `[service-name]` — pas de lib de logging pour le MVP
+- Each service is a class with constructor dependency injection
+- Express routes are grouped in `routes.ts`, socket.io handlers in `socket.ts`
+- Services emit events via an internal EventEmitter for decoupling
+- Error handling: explicit try/catch, no unhandled promises
+- Logging via `console.log` with `[service-name]` prefix — no logging library for MVP
 
 ```typescript
-// Pattern service
+// Service pattern
 export class ProcessManager {
   constructor(
     private config: AppConfig,
@@ -108,50 +122,51 @@ export class ProcessManager {
 
 ### Frontend
 
-- Composants fonctionnels uniquement, pas de classes React
-- Un composant par fichier, export default
-- Hooks custom dans `hooks/` pour toute logique réutilisable
-- État global minimal — préférer le state local + props drilling pour le MVP, pas de Redux/Zustand sauf si la complexité l'exige
-- Tailwind uniquement pour le styling, pas de CSS custom sauf cas exceptionnel (xterm.js)
+- Functional components only, no React classes
+- One component per file, default export
+- Custom hooks in `hooks/` for any reusable logic
+- Minimal global state — prefer local state + props drilling for MVP; no Redux/Zustand unless complexity demands it
+- Tailwind only for styling, no custom CSS except edge cases (xterm.js)
 
-### Gestion des erreurs
+### Error handling
 
-- Backend : retourner des objets `{ error: string }` avec le bon HTTP status code
-- Frontend : afficher les erreurs dans un toast/notification, jamais silencieusement
-- Toujours logger les erreurs côté backend avec le contexte (instanceId, projectPath, etc.)
+- Backend: return `{ error: string }` objects with the correct HTTP status code
+- Frontend: display errors in a toast/notification, never silently
+- Always log backend errors with context (instanceId, projectPath, etc.)
 
-## Communication Backend ↔ Frontend
+## Backend ↔ Frontend communication
 
 ### REST (Express)
 
-Utilisé pour les opérations CRUD et les requêtes ponctuelles :
+Used for CRUD operations and one-off requests:
 
-| Méthode | Route | Usage |
-|---------|-------|-------|
-| GET | `/api/config` | Lire la config |
-| PUT | `/api/config` | Modifier la config |
-| GET | `/api/projects` | Lister les projets détectés |
-| POST | `/api/projects/refresh` | Relancer le scan |
-| GET | `/api/instances` | Lister les instances actives |
-| POST | `/api/instances` | Créer une instance `{ projectPath }` |
-| DELETE | `/api/instances/:id` | Kill une instance |
+| Method | Route | Usage |
+|--------|-------|-------|
+| GET | `/api/config` | Read config |
+| PUT | `/api/config` | Update config |
+| GET | `/api/projects` | List detected projects |
+| POST | `/api/projects/refresh` | Re-trigger scan |
+| DELETE | `/api/projects/:path/worktree` | Delete a git worktree |
+| GET | `/api/instances` | List active instances |
+| POST | `/api/instances` | Spawn an instance `{ projectPath }` |
+| DELETE | `/api/instances/:id` | Kill an instance |
 
 ### WebSocket (socket.io)
 
-Utilisé pour le streaming temps réel :
+Used for real-time streaming:
 
 | Event | Direction | Payload | Usage |
 |-------|-----------|---------|-------|
-| `terminal:attach` | client → server | `{ instanceId }` | S'abonner au flux d'une instance |
-| `terminal:detach` | client → server | `{ instanceId }` | Se désabonner |
-| `terminal:input` | client → server | `{ instanceId, data }` | Envoyer du texte au PTY |
-| `terminal:resize` | client → server | `{ instanceId, cols, rows }` | Resize le PTY |
-| `terminal:output` | server → client | `{ instanceId, data }` | Output du PTY |
-| `terminal:history` | server → client | `{ instanceId, data }` | Buffer historique au attach |
-| `instance:status` | server → client | `{ instanceId, status }` | Changement de statut |
-| `instance:exited` | server → client | `{ instanceId, exitCode }` | Process terminé |
+| `terminal:attach` | client → server | `{ instanceId }` | Subscribe to an instance's stream |
+| `terminal:detach` | client → server | `{ instanceId }` | Unsubscribe |
+| `terminal:input` | client → server | `{ instanceId, data }` | Send text to the PTY |
+| `terminal:resize` | client → server | `{ instanceId, cols, rows }` | Resize the PTY |
+| `terminal:output` | server → client | `{ instanceId, data }` | PTY output |
+| `terminal:history` | server → client | `{ instanceId, data }` | History buffer on attach |
+| `instance:status` | server → client | `{ instanceId, status }` | Status change |
+| `instance:exited` | server → client | `{ instanceId, exitCode }` | Process terminated |
 
-## Interfaces clés
+## Key interfaces
 
 ```typescript
 interface Project {
@@ -161,7 +176,7 @@ interface Project {
   hasClaudeMd: boolean;
   lastModified: Date;
   isWorktree: boolean;
-  parentProject?: string; // si worktree, chemin du repo principal
+  parentProject?: string; // if worktree, path of the main repo
 }
 
 interface Instance {
@@ -181,32 +196,32 @@ interface AppConfig {
   port: number;
   maxInstances: number;
   statusPatterns: {
-    waitingInput: string[]; // regex patterns pour détecter le prompt
+    waitingInput: string[]; // regex patterns to detect the Claude prompt
   };
 }
 ```
 
-## Contraintes et limites
+## Constraints and limits
 
-- Le binaire `claude` doit être dans le PATH
-- Maximum 10 instances simultanées par défaut (configurable) — chaque PTY consomme un file descriptor
-- Le buffer historique par instance est limité à 5000 lignes
-- node-pty nécessite les Xcode CLI tools (`xcode-select --install`)
-- La détection de statut est heuristique — les patterns de prompt Claude Code peuvent changer entre versions
+- The `claude` binary must be in PATH
+- Maximum 10 simultaneous instances by default (configurable) — each PTY consumes a file descriptor
+- History buffer per instance is capped at 5000 lines
+- node-pty requires Xcode CLI tools (`xcode-select --install`)
+- Status detection is heuristic — Claude Code prompt patterns may change between versions
 
 ## Design
 
-- Thème sombre obligatoire — le dashboard est un outil de dev, pas une app consumer
-- Palette : fond noir/gris très foncé (#0a0a0a, #1a1a1a), accents verts/bleus pour les statuts
-- Typographie monospace pour tout ce qui est terminal, sans-serif (Inter ou system) pour l'UI
-- Icônes : lucide-react exclusivement
-- Animations minimales — transitions CSS courtes (150ms) pour les changements de statut
-- Sidebar : largeur fixe ~280px, collapsible
+- Dark theme required — this is a dev tool, not a consumer app
+- Palette: black/very dark grey background (#0a0a0a, #1a1a1a), green/blue accents for statuses
+- Monospace typography for terminals, sans-serif (Inter or system) for UI
+- Icons: lucide-react exclusively
+- Minimal animations — short CSS transitions (150ms) for status changes
+- Sidebar: fixed width ~280px, positioned on the **right**
 
-## Ce qu'il ne faut PAS faire
+## What NOT to do
 
-- Ne pas utiliser `child_process.spawn` directement — toujours passer par `node-pty` pour avoir un vrai PTY
-- Ne pas stocker de state dans des variables globales — tout passe par les services
-- Ne pas faire de polling HTTP pour le terminal — c'est du WebSocket uniquement
-- Ne pas essayer de parser le JSON output de Claude Code — on travaille avec le flux terminal brut
-- Ne pas ajouter de dépendances lourdes (ORM, framework CSS, state manager) sans justification claire
+- Do not use `child_process.spawn` directly — always go through `node-pty` for a real PTY
+- Do not store state in global variables — everything goes through services
+- Do not poll HTTP for terminal output — WebSocket only
+- Do not try to parse Claude Code's JSON output — work with the raw terminal stream
+- Do not add heavy dependencies (ORM, CSS framework, state manager) without clear justification
