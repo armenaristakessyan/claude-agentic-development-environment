@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Play, X } from 'lucide-react';
+import { Rocket, X, GitBranch, Folder, Plus } from 'lucide-react';
 import type { Project } from '../types';
 
 interface LaunchModalProps {
@@ -10,7 +10,7 @@ interface LaunchModalProps {
 
 export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalProps) {
   const [taskDescription, setTaskDescription] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -25,7 +25,8 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
       handleSubmit();
     } else if (e.key === 'Escape') {
       onClose();
@@ -34,54 +35,79 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="mx-4 w-full max-w-sm rounded-lg border border-neutral-700 bg-neutral-900 p-4 shadow-xl"
+        className="mx-4 w-full max-w-lg overflow-hidden rounded-xl border border-[#1e1e1e] bg-[#111111] shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-neutral-200">
-            <Play className="h-4 w-4 text-green-400" />
-            <span className="text-sm font-semibold">Launch new space</span>
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-[#1e1e1e] px-5 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-500/10">
+              <Plus className="h-4 w-4 text-gray-400" />
+            </div>
+            <div>
+              <span className="block text-[14px] font-medium text-neutral-200">New Task</span>
+              <span className="block text-[12px] text-neutral-600">{project.name}</span>
+            </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded p-1 text-neutral-500 transition-colors hover:bg-neutral-800 hover:text-neutral-300"
+            className="rounded-lg p-1.5 text-neutral-600 transition-colors hover:bg-[#1e1e1e] hover:text-neutral-400"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="mb-3">
-          <input
+        {/* Body */}
+        <div className="px-5 py-4">
+          {/* Project info badge */}
+          <div className="mb-4 flex items-center gap-2 rounded-lg bg-[#0d0d0d] px-3 py-2 text-[12px] text-neutral-500">
+            {isGit ? (
+              <>
+                <GitBranch className="h-3 w-3 text-neutral-600" />
+                <span>{project.gitBranch}</span>
+                <span className="text-neutral-700">--</span>
+                <span className="text-neutral-600">worktree + branch will be created</span>
+              </>
+            ) : (
+              <>
+                <Folder className="h-3 w-3 text-neutral-600" />
+                <span className="text-neutral-600">Not a git project -- will launch directly</span>
+              </>
+            )}
+          </div>
+
+          {/* Task input */}
+          <textarea
             ref={inputRef}
-            type="text"
             value={taskDescription}
             onChange={e => setTaskDescription(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="What would you like to work on?"
-            className="w-full rounded-md border border-neutral-700 bg-neutral-800 px-3 py-2 text-sm text-neutral-200 placeholder-neutral-500 outline-none focus:border-neutral-500 focus:ring-1 focus:ring-neutral-500"
+            rows={3}
+            className="w-full resize-none rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-2.5 text-[14px] text-neutral-300 placeholder-neutral-600 outline-none transition-colors focus:border-[#333]"
           />
-          <p className="mt-1.5 text-[11px] text-neutral-500">
-            {isGit
-              ? 'A worktree + branch will be created'
-              : 'Not a git project — will launch directly'}
+          <p className="mt-2 text-[11px] text-neutral-700">
+            Enter to launch -- Shift+Enter for new line -- Esc to cancel
           </p>
         </div>
 
-        <div className="flex justify-end gap-2">
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 border-t border-[#1e1e1e] px-5 py-3">
           <button
             onClick={onClose}
-            className="rounded px-3 py-1.5 text-xs text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
+            className="rounded-lg px-4 py-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-300"
           >
             Cancel
           </button>
           <button
             onClick={handleSubmit}
-            className="rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-green-500"
+            className="flex items-center gap-2 rounded-lg bg-green-600/80 px-4 py-2 text-[13px] font-medium text-white transition-colors hover:bg-green-500/80"
           >
+            <Rocket className="h-3.5 w-3.5" />
             Launch
           </button>
         </div>

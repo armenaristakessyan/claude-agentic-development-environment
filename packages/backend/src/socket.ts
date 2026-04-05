@@ -1,7 +1,8 @@
 import type { Server, Socket } from 'socket.io';
 import type { ProcessManager, InstanceContext } from './process-manager.js';
+import type { TaskStore } from './task-store.js';
 
-export function setupSocketHandlers(io: Server, processManager: ProcessManager): void {
+export function setupSocketHandlers(io: Server, processManager: ProcessManager, taskStore?: TaskStore): void {
   // Track which sockets are attached to which instances
   const attachments = new Map<string, Set<string>>(); // instanceId -> Set<socketId>
 
@@ -20,9 +21,12 @@ export function setupSocketHandlers(io: Server, processManager: ProcessManager):
     io.emit('instance:status', { instanceId, status });
   });
 
-  // Forward exit events to all clients
+  // Forward exit events to all clients + persist to task store
   processManager.on('exited', (instanceId: string, exitCode: number) => {
     io.emit('instance:exited', { instanceId, exitCode });
+    taskStore?.markExited(instanceId).catch(err => {
+      console.log('[socket] Failed to persist task exit:', err);
+    });
   });
 
   // Forward context changes to all clients

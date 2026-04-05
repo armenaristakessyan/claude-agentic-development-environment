@@ -153,7 +153,7 @@ export default function TerminalView({ instanceId, onTypingChange }: TerminalVie
     <div
       ref={containerRef}
       className="h-full w-full"
-      style={{ padding: '4px' }}
+      style={{ padding: '8px 10px' }}
     />
   );
 }

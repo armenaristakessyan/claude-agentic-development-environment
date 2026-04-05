@@ -1,0 +1,216 @@
+import fs from 'fs/promises';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import path from 'path';
+import os from 'os';
+
+const STORE_DIR = path.join(os.homedir(), '.claude-dashboard');
+const STORE_FILE = path.join(STORE_DIR, 'tasks.json');
+const MESSAGES_DIR = path.join(STORE_DIR, 'messages');
+
+interface StoredTask {
+  id: string;
+  projectPath: string;
+  projectName: string;
+  taskDescription: string | null;
+  worktreePath: string | null;
+  parentProjectPath: string | null;
+  branchName: string | null;
+  sessionId: string | null;
+  status: 'active' | 'exited';
+  createdAt: string;
+  exitedAt: string | null;
+  totalCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  model: string | null;
+  effort: string | null;
+  permissionMode: string | null;
+}
+
+export class TaskStore {
+  private tasks: StoredTask[] = [];
+
+  constructor() {
+    this.loadSync();
+  }
+
+  private loadSync(): void {
+    try {
+      if (existsSync(STORE_FILE)) {
+        const raw = readFileSync(STORE_FILE, 'utf-8');
+        this.tasks = JSON.parse(raw);
+        // Migrate old tasks missing fields
+        for (const task of this.tasks) {
+          task.totalCostUsd ??= 0;
+          task.totalInputTokens ??= 0;
+          task.totalOutputTokens ??= 0;
+          task.model ??= null;
+          task.effort ??= null;
+          task.permissionMode ??= null;
+        }
+        this.saveSync();
+      }
+    } catch (err) {
+      console.log('[task-store] Failed to load tasks:', err);
+      this.tasks = [];
+    }
+  }
+
+  private saveSync(): void {
+    try {
+      mkdirSync(STORE_DIR, { recursive: true });
+      writeFileSync(STORE_FILE, JSON.stringify(this.tasks, null, 2), 'utf-8');
+    } catch (err) {
+      console.log('[task-store] Failed to save tasks:', err);
+    }
+  }
+
+  private async save(): Promise<void> {
+    try {
+      await fs.mkdir(STORE_DIR, { recursive: true });
+      await fs.writeFile(STORE_FILE, JSON.stringify(this.tasks, null, 2), 'utf-8');
+    } catch (err) {
+      console.log('[task-store] Failed to save tasks:', err);
+    }
+  }
+
+  async updateCost(taskId: string, costUsd: number): Promise<void> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (task) {
+      task.totalCostUsd = (task.totalCostUsd ?? 0) + costUsd;
+      await this.save();
+    }
+  }
+
+  async updateStats(taskId: string, stats: {
+    costUsd?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    model?: string;
+  }): Promise<void> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    if (stats.costUsd) task.totalCostUsd = (task.totalCostUsd ?? 0) + stats.costUsd;
+    if (stats.inputTokens) task.totalInputTokens = (task.totalInputTokens ?? 0) + stats.inputTokens;
+    if (stats.outputTokens) task.totalOutputTokens = (task.totalOutputTokens ?? 0) + stats.outputTokens;
+    if (stats.model) task.model = stats.model;
+    await this.save();
+  }
+
+  async updateSettings(taskId: string, settings: {
+    effort?: string;
+    permissionMode?: string;
+    model?: string;
+  }): Promise<void> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    if (settings.effort) task.effort = settings.effort;
+    if (settings.permissionMode) task.permissionMode = settings.permissionMode;
+    if (settings.model) task.model = settings.model;
+    await this.save();
+  }
+
+  async addTask(task: Omit<StoredTask, 'status' | 'exitedAt'>): Promise<void> {
+    // Remove any existing task with the same ID
+    this.tasks = this.tasks.filter(t => t.id !== task.id);
+    this.tasks.unshift({
+      ...task,
+      status: 'active',
+      exitedAt: null,
+    });
+    // Keep max 50 tasks in history
+    if (this.tasks.length > 50) {
+      this.tasks = this.tasks.slice(0, 50);
+    }
+    await this.save();
+  }
+
+  async updateSessionId(taskId: string, sessionId: string): Promise<void> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (task) {
+      task.sessionId = sessionId;
+      await this.save();
+    }
+  }
+
+  async markExited(taskId: string): Promise<void> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (task) {
+      task.status = 'exited';
+      task.exitedAt = new Date().toISOString();
+      await this.save();
+    }
+  }
+
+  async removeTask(taskId: string): Promise<void> {
+    this.tasks = this.tasks.filter(t => t.id !== taskId);
+    await this.save();
+  }
+
+  getAll(): StoredTask[] {
+    return [...this.tasks];
+  }
+
+  getActive(): StoredTask[] {
+    return this.tasks.filter(t => t.status === 'active');
+  }
+
+  getHistory(): StoredTask[] {
+    return this.tasks.filter(t => t.status === 'exited');
+  }
+
+  // --- Message persistence ---
+
+  async saveMessages(taskId: string, messages: unknown[]): Promise<void> {
+    try {
+      await fs.mkdir(MESSAGES_DIR, { recursive: true });
+      const filePath = path.join(MESSAGES_DIR, `${taskId}.json`);
+      await fs.writeFile(filePath, JSON.stringify(messages), 'utf-8');
+    } catch (err) {
+      console.log(`[task-store] Failed to save messages for ${taskId}:`, err);
+    }
+  }
+
+  loadMessages(taskId: string): unknown[] {
+    try {
+      const filePath = path.join(MESSAGES_DIR, `${taskId}.json`);
+      if (existsSync(filePath)) {
+        const raw = readFileSync(filePath, 'utf-8');
+        return JSON.parse(raw);
+      }
+    } catch (err) {
+      console.log(`[task-store] Failed to load messages for ${taskId}:`, err);
+    }
+    return [];
+  }
+
+  // Also load messages for an old task ID (for resume — old task may have different ID)
+  loadMessagesBySessionId(sessionId: string): unknown[] {
+    const task = this.tasks.find(t => t.sessionId === sessionId);
+    if (task) return this.loadMessages(task.id);
+    return [];
+  }
+
+  async removeMessages(taskId: string): Promise<void> {
+    try {
+      const filePath = path.join(MESSAGES_DIR, `${taskId}.json`);
+      if (existsSync(filePath)) {
+        await fs.unlink(filePath);
+      }
+    } catch {
+      // non-fatal
+    }
+  }
+
+  // Find tasks that have worktrees still on disk but no running instance
+  getOrphaned(activeInstanceIds: Set<string>): StoredTask[] {
+    return this.tasks.filter(t =>
+      t.worktreePath &&
+      t.status === 'exited' &&
+      !activeInstanceIds.has(t.id) &&
+      existsSync(t.worktreePath),
+    );
+  }
+}
+
+export type { StoredTask };
