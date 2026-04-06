@@ -11,6 +11,7 @@ import { TaskStore } from './task-store.js';
 import { createRoutes } from './routes.js';
 import { setupStreamSocketHandlers } from './stream-socket.js';
 import { MarketplaceService } from './marketplace.js';
+import { RtkService } from './rtk-service.js';
 
 async function main(): Promise<void> {
   // Init services
@@ -41,9 +42,10 @@ async function main(): Promise<void> {
 
   // Services
   const marketplace = new MarketplaceService();
+  const rtkService = new RtkService();
 
   // Routes
-  const routes = createRoutes(configService, scanner, streamProcess, worktreeManager, taskStore, marketplace);
+  const routes = createRoutes(configService, scanner, streamProcess, worktreeManager, taskStore, marketplace, rtkService);
   app.use(routes);
 
   // WebSocket
@@ -135,6 +137,14 @@ async function main(): Promise<void> {
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+
+  // RTK status check
+  const rtkStatus = rtkService.getStatus();
+  if (rtkStatus.installed) {
+    console.log(`[server] RTK ${rtkStatus.version} detected, hooks: ${rtkStatus.hooksInstalled ? 'active' : 'not configured'}`);
+  } else {
+    console.log('[server] RTK not installed — token compression unavailable');
+  }
 
   httpServer.listen(PORT, () => {
     console.log(`[server] Claude Dashboard backend running on http://localhost:${PORT}`);

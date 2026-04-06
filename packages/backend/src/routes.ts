@@ -9,6 +9,7 @@ import type { StreamProcessManager } from './stream-process.js';
 import type { WorktreeManager } from './worktree-manager.js';
 import type { TaskStore } from './task-store.js';
 import type { MarketplaceService } from './marketplace.js';
+import type { RtkService } from './rtk-service.js';
 
 export function createRoutes(
   configService: ConfigService,
@@ -17,6 +18,7 @@ export function createRoutes(
   worktreeManager: WorktreeManager,
   taskStore: TaskStore,
   marketplace: MarketplaceService,
+  rtk: RtkService,
 ): Router {
   const router = Router();
 
@@ -743,6 +745,82 @@ export function createRoutes(
     } catch (err) {
       console.log('[routes] Error listing installed plugins:', err);
       res.status(500).json({ error: 'Failed to list installed plugins' });
+    }
+  });
+
+  // --- RTK (Token Compression) ---
+
+  router.get('/api/rtk/status', (_req, res) => {
+    try {
+      const status = rtk.getStatus();
+      res.json(status);
+    } catch (err) {
+      console.log('[routes] Error getting RTK status:', err);
+      res.json({ installed: false, version: null, hooksInstalled: false, hookDetails: 'Error checking status' });
+    }
+  });
+
+  router.post('/api/rtk/install-hooks', (_req, res) => {
+    try {
+      const result = rtk.installHooks();
+      res.json(result);
+    } catch (err) {
+      console.log('[routes] Error installing RTK hooks:', err);
+      res.status(500).json({ success: false, output: 'Failed to install hooks' });
+    }
+  });
+
+  router.post('/api/rtk/uninstall-hooks', (_req, res) => {
+    try {
+      const result = rtk.uninstallHooks();
+      res.json(result);
+    } catch (err) {
+      console.log('[routes] Error uninstalling RTK hooks:', err);
+      res.status(500).json({ success: false, output: 'Failed to uninstall hooks' });
+    }
+  });
+
+  router.get('/api/rtk/stats', (_req, res) => {
+    try {
+      const stats = rtk.getStats();
+      if (!stats) {
+        res.status(404).json({ error: 'No RTK stats available' });
+        return;
+      }
+      res.json(stats);
+    } catch (err) {
+      console.log('[routes] Error getting RTK stats:', err);
+      res.status(500).json({ error: 'Failed to get RTK stats' });
+    }
+  });
+
+  router.get('/api/rtk/graph', (_req, res) => {
+    try {
+      const graph = rtk.getGraph();
+      res.json({ graph: graph ?? '' });
+    } catch (err) {
+      console.log('[routes] Error getting RTK graph:', err);
+      res.status(500).json({ error: 'Failed to get RTK graph' });
+    }
+  });
+
+  router.get('/api/rtk/history', (_req, res) => {
+    try {
+      const history = rtk.getHistory();
+      res.json({ history: history ?? '' });
+    } catch (err) {
+      console.log('[routes] Error getting RTK history:', err);
+      res.status(500).json({ error: 'Failed to get RTK history' });
+    }
+  });
+
+  router.get('/api/rtk/discover', (_req, res) => {
+    try {
+      const output = rtk.discover();
+      res.json({ output: output ?? '' });
+    } catch (err) {
+      console.log('[routes] Error running RTK discover:', err);
+      res.status(500).json({ error: 'Failed to run RTK discover' });
     }
   });
 
