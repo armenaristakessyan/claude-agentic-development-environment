@@ -302,14 +302,17 @@ export default function App() {
             onUninstall={uninstallHooks}
             onDismiss={dismissRtk}
           />
-          {rateLimitInfo && (
-            <span className="flex items-center gap-1.5 rounded-md bg-amber-950/30 px-2 py-0.5 text-[11px] text-amber-400/80">
+          {rateLimitInfo && rateLimitInfo.status !== 'allowed' && (
+            <span className="flex items-center gap-1.5 rounded-md bg-amber-950/30 px-2 py-0.5 text-[11px] text-amber-300/70">
               <AlertTriangle className="h-3 w-3" />
-              Rate limited
+              Rate limit reached.
               {rateLimitInfo.resetsAt && (
-                <span className="text-amber-500/50">
-                  · {new Date(rateLimitInfo.resetsAt * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                <span className="text-amber-300/70">
+                  {' '}Resets {new Date(rateLimitInfo.resetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}.
                 </span>
+              )}
+              {rateLimitInfo.rateLimitType && (
+                <span className="text-amber-500/50">({rateLimitInfo.rateLimitType})</span>
               )}
             </span>
           )}
@@ -400,6 +403,7 @@ export default function App() {
               instances={instances}
               width={changesWidth}
               onClose={() => setTaskChangesInstanceId(null)}
+              onDeleteWorktree={handleDeleteWorktree}
             />
           </>
         )}
@@ -413,6 +417,7 @@ export default function App() {
           projectsRefreshing={projectsRefreshing}
           instances={instances}
           scanPaths={config?.scanPaths ?? []}
+          selectedInstanceId={selectedInstanceId}
           onRefreshProjects={refreshProjects}
           onLaunchProject={handleLaunch}
           onDeleteWorktree={handleDeleteWorktree}
@@ -448,9 +453,9 @@ export default function App() {
 function StatusIcon({ status }: { status: InstanceStatus }) {
   switch (status) {
     case 'processing':
-      return <Loader className="h-4 w-4 animate-spin text-blue-400" />;
+      return <Loader className="h-4 w-4 animate-spin text-blue-300" />;
     case 'waiting_input':
-      return <Pause className="h-4 w-4 text-green-400" />;
+      return <Pause className="h-4 w-4 text-emerald-300" />;
     case 'idle':
       return <Circle className="h-4 w-4 text-neutral-500" />;
     case 'exited':

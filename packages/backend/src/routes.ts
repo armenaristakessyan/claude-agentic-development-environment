@@ -238,6 +238,41 @@ export function createRoutes(
     }
   });
 
+  // Search for symbols (functions, classes, methods) in the project
+  router.get('/api/instances/:id/context/symbols', (req, res) => {
+    const cwd = getInstanceCwd(req.params.id);
+    if (!cwd) { res.status(404).json({ error: 'Instance not found' }); return; }
+
+    const query = (req.query.q as string ?? '').trim();
+    if (!query) { res.json({ symbols: [] }); return; }
+
+    try {
+      // Use grep to find function/method/class definitions matching the query
+      const pattern = `(function|const|let|var|class|interface|type|def|fn|func|pub|export|async)\\s+\\w*${query}\\w*`;
+      const output = execSync(
+        `grep -rn --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --include='*.py' --include='*.rs' --include='*.go' --include='*.java' --include='*.rb' --include='*.php' --include='*.swift' --include='*.kt' --include='*.scala' --include='*.c' --include='*.cpp' --include='*.h' -E '${pattern}' . 2>/dev/null || true`,
+        { cwd, encoding: 'utf-8', timeout: 5000, maxBuffer: 1024 * 512 },
+      );
+      const symbols = output.trim().split('\n')
+        .filter(Boolean)
+        .slice(0, 50)
+        .map(line => {
+          // Format: ./path/to/file:lineNum:matched line
+          const match = line.match(/^\.\/(.+?):(\d+):(.+)$/);
+          if (!match) return null;
+          const [, filePath, lineNum, text] = match;
+          // Extract symbol name from the matched line
+          const nameMatch = text.match(/(?:function|const|let|var|class|interface|type|def|fn|func|pub\s+fn|export\s+(?:default\s+)?(?:function|class|const|async\s+function))\s+(\w+)/);
+          const name = nameMatch?.[1] ?? text.trim().slice(0, 60);
+          return { name, filePath, line: parseInt(lineNum, 10), text: text.trim().slice(0, 120) };
+        })
+        .filter(Boolean);
+      res.json({ symbols });
+    } catch {
+      res.json({ symbols: [] });
+    }
+  });
+
   // Get file content
   router.post('/api/instances/:id/context/file-content', (req, res) => {
     const cwd = getInstanceCwd(req.params.id);
@@ -404,6 +439,219 @@ export function createRoutes(
     }
   });
 
+  // --- Git workflow: commit, push, PR, merge ---
+
+  // Git status summary (uncommitted + unpushed info)
+  router.get('/api/instances/:id/git/status', (req, res) => {
+    const cwd = getInstanceCwd(req.params.id);
+    if (!cwd) { res.status(404).json({ error: 'Instance not found' }); return; }
+
+    try {
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+
+      // Uncommitted changes count
+      const statusOutput = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
+      const uncommittedFiles = statusOutput.trim().split('\n').filter(Boolean).length;
+
+      // Commits ahead of main (unpushed)
+      let mainBranch = 'main';
+      try {
+        // Detect default branch
+        const defaultRef = execSync('git symbolic-ref refs/remotes/origin/HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+        mainBranch = defaultRef.replace('refs/remotes/origin/', '');
+      } catch {
+        // Try master if main doesn't exist
+        try {
+          execSync('git rev-parse --verify origin/master', { cwd, encoding: 'utf-8', timeout: 5000 });
+          mainBranch = 'master';
+        } catch { /* keep main */ }
+      }
+
+      let commitsAhead = 0;
+      let commitMessages: string[] = [];
+      try {
+        const log = execSync(`git log origin/${mainBranch}..HEAD --oneline`, { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+        const lines = log.split('\n').filter(Boolean);
+        commitsAhead = lines.length;
+        commitMessages = lines.map(l => l.replace(/^[a-f0-9]+ /, ''));
+      } catch { /* no remote or no commits */ }
+
+      // Check if remote tracking branch exists
+      let hasRemote = false;
+      try {
+        execSync(`git rev-parse --verify origin/${branch}`, { cwd, encoding: 'utf-8', timeout: 5000 });
+        hasRemote = true;
+      } catch { /* not pushed yet */ }
+
+      // Check if there are unpushed commits on current branch
+      let unpushedCount = 0;
+      if (hasRemote) {
+        try {
+          const unpushed = execSync(`git log origin/${branch}..HEAD --oneline`, { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+          unpushedCount = unpushed.split('\n').filter(Boolean).length;
+        } catch { /* ignore */ }
+      } else {
+        unpushedCount = commitsAhead;
+      }
+
+      res.json({
+        branch,
+        mainBranch,
+        uncommittedFiles,
+        commitsAhead,
+        commitMessages,
+        unpushedCount,
+        hasRemote,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to get git status';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Commit changes
+  router.post('/api/instances/:id/git/commit', (req, res) => {
+    const cwd = getInstanceCwd(req.params.id);
+    if (!cwd) { res.status(404).json({ error: 'Instance not found' }); return; }
+
+    const { message, files } = req.body as { message?: string; files?: string[] };
+    if (!message) { res.status(400).json({ error: 'Commit message is required' }); return; }
+
+    try {
+      if (files && files.length > 0) {
+        // Stage specific files
+        for (const file of files) {
+          execSync(`git add -- "${file}"`, { cwd, encoding: 'utf-8', timeout: 5000 });
+        }
+      } else {
+        // Stage all changes
+        execSync('git add -A', { cwd, encoding: 'utf-8', timeout: 5000 });
+      }
+
+      execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, {
+        cwd,
+        encoding: 'utf-8',
+        timeout: 15000,
+      });
+
+      const hash = execSync('git rev-parse --short HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+      console.log(`[routes] Committed ${hash}: ${message}`);
+      res.json({ ok: true, hash });
+    } catch (err) {
+      const message2 = err instanceof Error ? err.message : 'Failed to commit';
+      console.error('[routes] Commit failed:', message2);
+      res.status(500).json({ error: message2 });
+    }
+  });
+
+  // Push current branch to remote
+  router.post('/api/instances/:id/git/push', (req, res) => {
+    const cwd = getInstanceCwd(req.params.id);
+    if (!cwd) { res.status(404).json({ error: 'Instance not found' }); return; }
+
+    try {
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+      execSync(`git push -u origin "${branch}"`, {
+        cwd,
+        encoding: 'utf-8',
+        timeout: 30000,
+      });
+      console.log(`[routes] Pushed branch ${branch}`);
+      res.json({ ok: true, branch });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to push';
+      console.error('[routes] Push failed:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Create pull request via gh CLI
+  router.post('/api/instances/:id/git/create-pr', (req, res) => {
+    const cwd = getInstanceCwd(req.params.id);
+    if (!cwd) { res.status(404).json({ error: 'Instance not found' }); return; }
+
+    const { title, body, baseBranch } = req.body as { title?: string; body?: string; baseBranch?: string };
+    if (!title) { res.status(400).json({ error: 'PR title is required' }); return; }
+
+    try {
+      // Push first if not already pushed
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+      try {
+        execSync(`git push -u origin "${branch}"`, { cwd, encoding: 'utf-8', timeout: 30000 });
+      } catch { /* may already be pushed */ }
+
+      // Create PR
+      const baseArg = baseBranch ? `--base "${baseBranch}"` : '';
+      const bodyArg = body ? `--body "${body.replace(/"/g, '\\"')}"` : '--body ""';
+      const output = execSync(
+        `gh pr create --title "${title.replace(/"/g, '\\"')}" ${bodyArg} ${baseArg}`,
+        { cwd, encoding: 'utf-8', timeout: 30000 },
+      );
+      const prUrl = output.trim().split('\n').pop() ?? '';
+      console.log(`[routes] Created PR: ${prUrl}`);
+      res.json({ ok: true, url: prUrl });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to create PR';
+      console.error('[routes] PR creation failed:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Merge worktree branch into main (squash merge)
+  router.post('/api/instances/:id/git/merge-to-main', (req, res) => {
+    const instance = processManager.get(req.params.id);
+    if (!instance) { res.status(404).json({ error: 'Instance not found' }); return; }
+
+    const parentPath = instance.parentProjectPath ?? instance.projectPath;
+    const worktreePath = instance.worktreePath;
+    if (!worktreePath) { res.status(400).json({ error: 'Instance is not in a worktree' }); return; }
+
+    const { commitMessage } = req.body as { commitMessage?: string };
+
+    try {
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+        cwd: worktreePath,
+        encoding: 'utf-8',
+        timeout: 5000,
+      }).trim();
+
+      // Detect main branch
+      let mainBranch = 'main';
+      try {
+        const defaultRef = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
+          cwd: parentPath,
+          encoding: 'utf-8',
+          timeout: 5000,
+        }).trim();
+        mainBranch = defaultRef.replace('refs/remotes/origin/', '');
+      } catch {
+        try {
+          execSync('git rev-parse --verify master', { cwd: parentPath, encoding: 'utf-8', timeout: 5000 });
+          mainBranch = 'master';
+        } catch { /* keep main */ }
+      }
+
+      // Switch to main in the parent repo and squash merge
+      execSync(`git checkout ${mainBranch}`, { cwd: parentPath, encoding: 'utf-8', timeout: 10000 });
+      execSync(`git merge --squash "${branch}"`, { cwd: parentPath, encoding: 'utf-8', timeout: 15000 });
+
+      const msg = commitMessage ?? `Merge ${branch}`;
+      execSync(`git commit -m "${msg.replace(/"/g, '\\"')}"`, {
+        cwd: parentPath,
+        encoding: 'utf-8',
+        timeout: 15000,
+      });
+
+      const hash = execSync('git rev-parse --short HEAD', { cwd: parentPath, encoding: 'utf-8', timeout: 5000 }).trim();
+      console.log(`[routes] Squash-merged ${branch} into ${mainBranch} (${hash})`);
+      res.json({ ok: true, hash, mainBranch });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to merge';
+      console.error('[routes] Merge failed:', message);
+      res.status(500).json({ error: message });
+    }
+  });
+
   // Task history — enrich with worktreeExists flag
   router.get('/api/tasks', (_req, res) => {
     const tasks = taskStore.getAll().map(t => ({
@@ -546,6 +794,46 @@ export function createRoutes(
     }
   });
 
+  // Read permissions from all scopes for an instance
+  router.get('/api/instances/:id/permissions', (req, res) => {
+    const instance = processManager.get(req.params.id);
+    if (!instance) { res.status(404).json({ error: 'Instance not found' }); return; }
+
+    const cwd = instance.worktreePath ?? instance.projectPath;
+    const claudeDir = join(homedir(), '.claude');
+
+    const readJsonPermissions = (filePath: string): string[] => {
+      try {
+        if (!existsSync(filePath)) return [];
+        const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+        return data?.permissions?.allow ?? [];
+      } catch { return []; }
+    };
+
+    // Session-level: approved tools in memory for this instance
+    const sessionPermissions = [...processManager.getApprovedTools(req.params.id)];
+
+    // Project-level: .claude/settings.local.json in the project
+    const projectPermissions = readJsonPermissions(join(cwd, '.claude', 'settings.local.json'));
+
+    // Project shared: .claude/settings.json in the project
+    const projectSharedPermissions = readJsonPermissions(join(cwd, '.claude', 'settings.json'));
+
+    // User-level: ~/.claude/settings.local.json
+    const userPermissions = readJsonPermissions(join(claudeDir, 'settings.local.json'));
+
+    // Global: ~/.claude/settings.json
+    const globalPermissions = readJsonPermissions(join(claudeDir, 'settings.json'));
+
+    res.json({
+      session: sessionPermissions,
+      project: projectPermissions,
+      projectShared: projectSharedPermissions,
+      user: userPermissions,
+      global: globalPermissions,
+    });
+  });
+
   // Worktrees
   router.delete('/api/worktrees', async (req, res) => {
     const { projectPath, worktreePath } = req.body as { projectPath?: string; worktreePath?: string };
@@ -649,6 +937,55 @@ export function createRoutes(
     res.json(processManager.getSlashCommands());
   });
 
+  // Context usage — token breakdown by category
+  router.get('/api/instances/:id/context-usage', async (req, res) => {
+    try {
+      const usage = await processManager.getContextUsage(req.params.id);
+      res.json(usage ?? {});
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to get context usage';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Supported models — dynamic from SDK
+  router.get('/api/instances/:id/models', async (req, res) => {
+    try {
+      const models = await processManager.getSupportedModels(req.params.id);
+      res.json(models);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to get models';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Rewind files to a previous message state
+  router.post('/api/instances/:id/rewind', async (req, res) => {
+    const { userMessageId, dryRun } = req.body as { userMessageId?: string; dryRun?: boolean };
+    if (!userMessageId) {
+      res.status(400).json({ error: 'userMessageId is required' });
+      return;
+    }
+    try {
+      const result = await processManager.rewindFiles(req.params.id, userMessageId, dryRun ?? false);
+      res.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to rewind files';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Interrupt — stop the current generation
+  router.post('/api/instances/:id/interrupt', (req, res) => {
+    try {
+      processManager.interrupt(req.params.id);
+      res.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to interrupt';
+      res.status(404).json({ error: message });
+    }
+  });
+
   // Clear session — resets sessionId, messages, and permissions
   router.post('/api/instances/:id/clear', async (req, res) => {
     try {
@@ -708,9 +1045,13 @@ export function createRoutes(
     }
   });
 
-  router.post('/api/marketplace/plugins/:marketplace/:pluginName/install', (req, res) => {
+  router.post('/api/marketplace/plugins/:marketplace/:pluginName/install', async (req, res) => {
     try {
       marketplace.installPlugin(req.params.marketplace, req.params.pluginName);
+      // Refresh slash commands so new plugin commands are available immediately
+      processManager.prefetchSlashCommands(true).catch(err => {
+        console.log('[routes] Background slash command refresh failed:', err);
+      });
       res.json({ ok: true });
     } catch (err) {
       console.log('[routes] Error installing plugin:', err);
@@ -718,9 +1059,13 @@ export function createRoutes(
     }
   });
 
-  router.post('/api/marketplace/plugins/:marketplace/:pluginName/uninstall', (req, res) => {
+  router.post('/api/marketplace/plugins/:marketplace/:pluginName/uninstall', async (req, res) => {
     try {
       marketplace.uninstallPlugin(req.params.marketplace, req.params.pluginName);
+      // Refresh slash commands to remove uninstalled plugin commands
+      processManager.prefetchSlashCommands(true).catch(err => {
+        console.log('[routes] Background slash command refresh failed:', err);
+      });
       res.json({ ok: true });
     } catch (err) {
       console.log('[routes] Error uninstalling plugin:', err);

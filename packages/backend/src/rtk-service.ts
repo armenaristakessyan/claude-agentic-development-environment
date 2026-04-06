@@ -82,8 +82,14 @@ export class RtkService {
   getHookStatus(): { installed: boolean; details: string } {
     const output = this.exec('init --show');
     if (!output) return { installed: false, details: 'RTK not installed or init --show failed' };
-    const hasHook = output.toLowerCase().includes('hook') && !output.toLowerCase().includes('not installed');
-    return { installed: hasHook, details: output };
+    // Parse line-by-line: look for the Hook line specifically
+    // Output format: "[ok] Hook: installed" or "[--] Hook: not found"
+    const hookLine = output.split('\n').find(l => /hook:/i.test(l) && !/cursor/i.test(l));
+    const hasHook = hookLine ? /\[ok\]/i.test(hookLine) : false;
+    // Also check if settings.json is configured
+    const settingsLine = output.split('\n').find(l => /settings\.json/i.test(l));
+    const settingsOk = settingsLine ? /\[ok\]/i.test(settingsLine) : false;
+    return { installed: hasHook || settingsOk, details: output };
   }
 
   installHooks(): { success: boolean; output: string } {

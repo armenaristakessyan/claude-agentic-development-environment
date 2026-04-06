@@ -1,4 +1,4 @@
-import { Check, Download, Puzzle } from 'lucide-react';
+import { Check, Download, Loader, Puzzle } from 'lucide-react';
 import type { PluginMetadata } from '../types';
 
 function formatCount(n: number): string {
@@ -15,12 +15,13 @@ function marketplaceLabel(marketplace: string): string {
 
 interface PluginCardProps {
   plugin: PluginMetadata;
+  isLoading?: boolean;
   onClick: () => void;
   onInstall: () => void;
   onUninstall: () => void;
 }
 
-export default function PluginCard({ plugin, onClick, onInstall, onUninstall }: PluginCardProps) {
+export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUninstall }: PluginCardProps) {
   return (
     <button
       onClick={onClick}
@@ -48,7 +49,7 @@ export default function PluginCard({ plugin, onClick, onInstall, onUninstall }: 
       <div className="flex items-center gap-1.5">
         {/* Segment tag */}
         {plugin.segment && (
-          <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-400">
+          <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-300">
             {plugin.segment}
           </span>
         )}
@@ -74,10 +75,15 @@ export default function PluginCard({ plugin, onClick, onInstall, onUninstall }: 
         <div className="flex-1" />
 
         {/* Install/Uninstall button */}
-        {plugin.isInstalled ? (
+        {isLoading ? (
+          <span className="flex items-center gap-1 rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300">
+            <Loader className="h-2.5 w-2.5 animate-spin" />
+            {plugin.isInstalled ? 'Removing...' : 'Installing...'}
+          </span>
+        ) : plugin.isInstalled ? (
           <span
             onClick={e => { e.stopPropagation(); onUninstall(); }}
-            className="flex items-center gap-1 rounded bg-green-500/10 px-2 py-0.5 text-[10px] text-green-400 transition-colors hover:bg-red-500/10 hover:text-red-400"
+            className="flex items-center gap-1 rounded bg-green-500/10 px-2 py-0.5 text-[10px] text-emerald-300 transition-colors hover:bg-red-500/10 hover:text-rose-300"
             title="Click to uninstall"
           >
             <Check className="h-2.5 w-2.5" />
@@ -86,7 +92,7 @@ export default function PluginCard({ plugin, onClick, onInstall, onUninstall }: 
         ) : (
           <span
             onClick={e => { e.stopPropagation(); onInstall(); }}
-            className="rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-400 opacity-0 transition-all group-hover:opacity-100 hover:bg-blue-500/20"
+            className="rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300 opacity-0 transition-all group-hover:opacity-100 hover:bg-blue-500/20"
           >
             Install
           </span>

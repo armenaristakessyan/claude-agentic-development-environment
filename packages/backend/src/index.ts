@@ -38,7 +38,7 @@ async function main(): Promise<void> {
   app.use(cors({
     origin: ['http://localhost:5173', 'http://localhost:5174'],
   }));
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
 
   // Services
   const marketplace = new MarketplaceService();

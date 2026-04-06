@@ -38,8 +38,9 @@ export interface Instance {
 }
 
 export interface ContentBlock {
-  type: 'text' | 'tool_use' | 'tool_result';
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking';
   text?: string;
+  thinking?: string;
   name?: string;
   input?: unknown;
   tool_use_id?: string;
@@ -142,4 +143,5 @@ export interface RtkStats {
   totalTokensOriginal: number;
   savingsPercent: number;
   commandCount: number;
+  raw?: unknown;
 }

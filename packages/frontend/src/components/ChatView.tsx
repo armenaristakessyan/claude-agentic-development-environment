@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo, type MutableRefObject } from 'react';
-import { ChevronDown, ChevronRight, ChevronUp, Loader, Copy, Check, BookOpen, Pencil, FilePlus, Terminal, Search, FolderSearch, ListChecks, Globe, Link, Bot, Zap, Plus, Sparkles, CornerDownLeft, FileText, GitBranch as GitBranchIcon, GitCommit, FileDiff, Server, Upload, Shield, AlertTriangle as AlertTriangleIcon, type LucideIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, type MutableRefObject } from 'react';
+import { ChevronDown, ChevronRight, ChevronUp, Loader, Copy, Check, BookOpen, Pencil, FilePlus, Terminal, Search, FolderSearch, ListChecks, Globe, Link, Bot, Zap, Plus, Sparkles, CornerDownLeft, FileText, GitBranch as GitBranchIcon, GitCommit, FileDiff, Server, Upload, AlertTriangle as AlertTriangleIcon, Square, type LucideIcon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -20,6 +20,67 @@ interface ContextItem {
   type: 'file' | 'branch' | 'commit' | 'changes';
   label: string;
   value: string; // content or identifier
+}
+
+interface MentionResult {
+  label: string;
+  insertText: string;
+  ext: string;
+}
+
+/** Map file extension to a short language label and color */
+function extInfo(ext: string): { lang: string; color: string } {
+  switch (ext) {
+    case 'ts': case 'tsx': return { lang: 'TS', color: 'text-blue-300 bg-blue-400/10' };
+    case 'js': case 'jsx': return { lang: 'JS', color: 'text-yellow-400 bg-yellow-400/10' };
+    case 'py': return { lang: 'PY', color: 'text-emerald-300 bg-green-400/10' };
+    case 'rs': return { lang: 'RS', color: 'text-orange-300/80 bg-orange-400/10' };
+    case 'go': return { lang: 'GO', color: 'text-cyan-300 bg-cyan-400/10' };
+    case 'java': return { lang: 'JV', color: 'text-rose-300 bg-red-400/10' };
+    case 'rb': return { lang: 'RB', color: 'text-rose-300 bg-red-400/10' };
+    case 'php': return { lang: 'PHP', color: 'text-violet-300 bg-purple-400/10' };
+    case 'swift': return { lang: 'SW', color: 'text-orange-300/80 bg-orange-400/10' };
+    case 'kt': return { lang: 'KT', color: 'text-violet-300 bg-purple-400/10' };
+    case 'c': case 'cpp': case 'h': return { lang: 'C', color: 'text-blue-300 bg-blue-300/10' };
+    case 'css': case 'scss': return { lang: 'CSS', color: 'text-pink-300 bg-pink-400/10' };
+    case 'html': return { lang: 'HTML', color: 'text-orange-300/80 bg-orange-400/10' };
+    case 'json': return { lang: 'JSON', color: 'text-yellow-300 bg-yellow-300/10' };
+    case 'md': case 'mdx': return { lang: 'MD', color: 'text-neutral-400 bg-neutral-400/10' };
+    case 'yaml': case 'yml': return { lang: 'YML', color: 'text-green-300 bg-green-300/10' };
+    case 'toml': return { lang: 'TOML', color: 'text-neutral-400 bg-neutral-400/10' };
+    case 'sql': return { lang: 'SQL', color: 'text-blue-300 bg-blue-300/10' };
+    case 'sh': case 'bash': case 'zsh': return { lang: 'SH', color: 'text-emerald-300 bg-green-400/10' };
+    case 'scala': return { lang: 'SC', color: 'text-red-300 bg-red-300/10' };
+    default: return { lang: ext.toUpperCase().slice(0, 3) || 'FILE', color: 'text-neutral-500 bg-neutral-500/10' };
+  }
+}
+
+interface ParsedSlashCommand {
+  raw: string;         // full command as-is (e.g. "agicap:deploy")
+  display: string;     // what to show (e.g. "deploy")
+  badge: string;       // source badge (e.g. "agicap", "claude")
+  badgeColor: string;  // tailwind classes for badge
+}
+
+function parseSlashCommand(cmd: string): ParsedSlashCommand {
+  const colonIdx = cmd.indexOf(':');
+  if (colonIdx > 0) {
+    // Prefixed command like "team-name:skill-name" — show skill name, badge = team
+    const team = cmd.slice(0, colonIdx);
+    const name = cmd.slice(colonIdx + 1);
+    return {
+      raw: cmd,
+      display: name,
+      badge: team,
+      badgeColor: 'text-violet-300/80 bg-violet-400/10',
+    };
+  }
+  return {
+    raw: cmd,
+    display: cmd,
+    badge: 'claude',
+    badgeColor: 'text-orange-300/80 bg-orange-400/10',
+  };
 }
 
 interface ChatViewProps {
@@ -80,11 +141,22 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   const deltaBufferRef = useRef('');
   const flushTimerRef = useRef<number | null>(null);
 
+  // Thinking block streaming
+  const [thinkingText, setThinkingText] = useState('');
+  const thinkingBufferRef = useRef('');
+  const thinkingFlushRef = useRef<number | null>(null);
+
+  // Tool progress (real-time: "Running bash for 12s...")
+  const [toolProgress, setToolProgress] = useState<{ toolName: string; elapsedSeconds: number } | null>(null);
+
+  // Context usage (token budget)
+  const [contextUsage, setContextUsage] = useState<{ usedTokens: number; maxTokens: number } | null>(null);
+
   // Session info (tools, MCP servers, etc.)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
 
-  // Pre-fetch slash commands from server cache (available before first message)
-  useEffect(() => {
+  // Fetch slash commands from server cache
+  const refreshSlashCommands = useCallback(() => {
     fetch('/api/slash-commands')
       .then(res => res.ok ? res.json() as Promise<string[]> : [])
       .then(commands => {
@@ -93,12 +165,31 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             sessionId: prev?.sessionId ?? null,
             model: prev?.model ?? null,
             ...prev,
-            slashCommands: prev?.slashCommands ?? commands,
+            slashCommands: commands,
           }));
         }
       })
       .catch(() => {});
   }, []);
+
+  // Pre-fetch on mount with retry, + refresh when plugins change
+  useEffect(() => {
+    refreshSlashCommands();
+    // Backend may still be prefetching on cold start — retry a few times
+    const retryTimers = [2000, 5000, 10000].map(delay =>
+      setTimeout(() => {
+        if (!sessionInfo?.slashCommands || sessionInfo.slashCommands.length === 0) {
+          refreshSlashCommands();
+        }
+      }, delay),
+    );
+    const onPluginsChanged = () => refreshSlashCommands();
+    window.addEventListener('plugins-changed', onPluginsChanged);
+    return () => {
+      retryTimers.forEach(clearTimeout);
+      window.removeEventListener('plugins-changed', onPluginsChanged);
+    };
+  }, [refreshSlashCommands]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Context attachments
   const [contextItems, setContextItems] = useState<ContextItem[]>([]);
@@ -106,6 +197,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const socket = useSocket();
 
   // Fetch message history on mount
@@ -125,6 +217,9 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       // Clear streaming text when full message arrives (prevents duplication)
       setStreamingText('');
       deltaBufferRef.current = '';
+      setThinkingText('');
+      thinkingBufferRef.current = '';
+      setToolProgress(null);
     };
 
     const onContentBlock = ({ instanceId: id, block }: { instanceId: string; block: ContentBlock }) => {
@@ -161,6 +256,17 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
 
     const onResult = ({ instanceId: id, costUsd, durationMs }: { instanceId: string; costUsd: number; durationMs: number }) => {
       if (id !== instanceId) return;
+      setSending(false);
+      setToolProgress(null);
+      // Fetch context usage after each turn
+      fetch(`/api/instances/${instanceId}/context-usage`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (data && typeof data === 'object' && 'used_tokens' in data) {
+            setContextUsage({ usedTokens: data.used_tokens as number, maxTokens: data.max_tokens as number });
+          }
+        })
+        .catch(() => {});
       setMeta(prev => ({
         ...prev,
         totalCostUsd: prev.totalCostUsd + (costUsd ?? 0),
@@ -190,8 +296,8 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     };
 
     // RAF-throttled stream delta handler for real-time text streaming
-    const onStreamDelta = ({ instanceId: id, text, type }: {
-      instanceId: string; text?: string; type?: string; blockType?: string;
+    const onStreamDelta = ({ instanceId: id, text, thinking, type, blockType }: {
+      instanceId: string; text?: string; thinking?: string; type?: string; blockType?: string;
     }) => {
       if (id !== instanceId) return;
       if (text) {
@@ -205,15 +311,40 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
           });
         }
       }
-      if (type === 'start') {
-        setStreamingText('');
-        deltaBufferRef.current = '';
+      if (thinking) {
+        thinkingBufferRef.current += thinking;
+        if (!thinkingFlushRef.current) {
+          thinkingFlushRef.current = window.requestAnimationFrame(() => {
+            const buffered = thinkingBufferRef.current;
+            thinkingBufferRef.current = '';
+            thinkingFlushRef.current = null;
+            setThinkingText(prev => prev + buffered);
+          });
+        }
       }
+      if (type === 'start') {
+        if (blockType === 'thinking') {
+          setThinkingText('');
+          thinkingBufferRef.current = '';
+        } else {
+          setStreamingText('');
+          deltaBufferRef.current = '';
+        }
+      }
+    };
+
+    // Tool progress — real-time feedback during long tool runs
+    const onToolProgress = ({ instanceId: id, toolName, elapsedSeconds }: {
+      instanceId: string; toolName: string; elapsedSeconds: number;
+    }) => {
+      if (id !== instanceId) return;
+      setToolProgress({ toolName, elapsedSeconds });
     };
 
     socket.on('chat:message', onMessage);
     socket.on('chat:content_block', onContentBlock);
     socket.on('chat:stream_delta', onStreamDelta);
+    socket.on('chat:tool_progress', onToolProgress);
     socket.on('instance:status', onStatus);
     socket.on('chat:session', onSession);
     socket.on('chat:result', onResult);
@@ -236,6 +367,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       socket.off('chat:message', onMessage);
       socket.off('chat:content_block', onContentBlock);
       socket.off('chat:stream_delta', onStreamDelta);
+      socket.off('chat:tool_progress', onToolProgress);
       socket.off('instance:status', onStatus);
       socket.off('chat:session', onSession);
       socket.off('chat:result', onResult);
@@ -247,6 +379,10 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       if (flushTimerRef.current) {
         cancelAnimationFrame(flushTimerRef.current);
         flushTimerRef.current = null;
+      }
+      if (thinkingFlushRef.current) {
+        cancelAnimationFrame(thinkingFlushRef.current);
+        thinkingFlushRef.current = null;
       }
     };
   }, [instanceId, socket]);
@@ -289,30 +425,46 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   const approvedToolsRef = useRef(new Set<string>());
 
   // Approve a tool with optional persistence scope, then re-send
-  const approveToolPersist = useCallback((toolName: string, scope: 'session' | 'project') => {
+  const approveToolPersist = useCallback(async (toolName: string, scope: 'session' | 'project') => {
     approvedToolsRef.current.add(toolName);
     setPendingPermission(null);
 
-    // Persist via API (session = in-memory only, project = settings.local.json)
-    fetch(`/api/instances/${instanceId}/allow-tool`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ toolName, scope }),
-    }).catch(() => {});
+    try {
+      // First: persist the approval and wait for it to complete
+      const allowRes = await fetch(`/api/instances/${instanceId}/allow-tool`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toolName, scope }),
+      });
+      if (!allowRes.ok) {
+        console.error(`[ChatView] allow-tool failed: ${allowRes.status}`);
+      }
+    } catch (err) {
+      console.error('[ChatView] allow-tool request failed:', err);
+    }
 
-    // Re-send with a simple "continue" — hidden flag prevents duplicate user bubble
+    // Then: re-send with a simple "continue" — hidden flag prevents duplicate user bubble
     setSending(true);
-    fetch(`/api/instances/${instanceId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: `I have approved the ${toolName} tool. Please continue with what you were doing.`,
-        model: modelIdMap[selectedModel],
-        permissionMode,
-        effort: effortLevel,
-        hidden: true,
-      }),
-    }).catch(() => { setSending(false); });
+    try {
+      const msgRes = await fetch(`/api/instances/${instanceId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: `I have approved the ${toolName} tool. Please continue with what you were doing.`,
+          model: modelIdMap[selectedModel],
+          permissionMode,
+          effort: effortLevel,
+          hidden: true,
+        }),
+      });
+      if (!msgRes.ok) {
+        console.error(`[ChatView] send message after approval failed: ${msgRes.status}`);
+        setSending(false);
+      }
+    } catch (err) {
+      console.error('[ChatView] send message after approval failed:', err);
+      setSending(false);
+    }
   }, [instanceId, selectedModel, permissionMode, effortLevel]);
 
   // Dismiss permission prompt without approving
@@ -336,8 +488,9 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   }, [contextItems]);
 
   // Direct send for hotkeys and quick-action buttons
-  const sendDirect = useCallback(async (text: string) => {
-    if (sending || status === 'exited') return;
+  // force=true bypasses the sending guard (used for permission/question responses)
+  const sendDirect = useCallback(async (text: string, force = false) => {
+    if ((!force && sending) || status === 'exited') return;
     setSending(true);
     try {
       await fetch(`/api/instances/${instanceId}/messages`, {
@@ -357,11 +510,76 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     }
   }, [sending, status, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload]);
 
+  // Interrupt current generation
+  const handleInterrupt = useCallback(async () => {
+    try {
+      await fetch(`/api/instances/${instanceId}/interrupt`, { method: 'POST' });
+      setSending(false);
+    } catch { /* ignore */ }
+  }, [instanceId]);
+
+  // Handle file upload from the hidden input
+  const handleUploadFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    for (const file of Array.from(files)) {
+      if (file.type.startsWith('image/')) {
+        const dataUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+        setContextItems(prev => [...prev, { type: 'file', label: file.name, value: `[Image: ${file.name}]\n${dataUrl}` }]);
+      } else {
+        const text = await file.text();
+        setContextItems(prev => [...prev, { type: 'file', label: file.name, value: text }]);
+      }
+    }
+    // Reset so the same file can be re-selected
+    e.target.value = '';
+  }, []);
+
+  // @ mention state for codebase search (files + symbols)
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionResults, setMentionResults] = useState<MentionResult[]>([]);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionActive, setMentionActive] = useState(false);
+  const mentionSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced search for @ mentions — files only
+  useEffect(() => {
+    if (!mentionActive || !mentionQuery) {
+      setMentionResults([]);
+      return;
+    }
+    if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
+    mentionSearchTimer.current = setTimeout(async () => {
+      try {
+        const q = mentionQuery.toLowerCase();
+        const res = await fetch(`/api/instances/${instanceId}/context/files`);
+        const data = await res.json() as { files: string[] };
+        const results: MentionResult[] = (data.files ?? [])
+          .filter(f => f.toLowerCase().includes(q))
+          .slice(0, 15)
+          .map(f => {
+            const ext = f.split('.').pop() ?? '';
+            return { label: f, insertText: f, ext };
+          });
+        setMentionResults(results);
+        setMentionIndex(0);
+      } catch {
+        setMentionResults([]);
+      }
+    }, 150);
+    return () => { if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current); };
+  }, [mentionQuery, mentionActive, instanceId]);
+
   // Submit answer to a user question — sends as the next message
   const submitQuestionAnswer = useCallback((answers: string[]) => {
     const answerText = answers.join(', ');
     setPendingQuestion(null);
-    sendDirect(answerText);
+    sendDirect(answerText, true);
   }, [sendDirect]);
 
   // Expose sendMessage to parent via ref
@@ -374,9 +592,23 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     };
   }, [sendRef, sendDirect]);
 
+  const isProcessing = status === 'processing';
+
+  // Queue for messages sent while processing — delivered after interrupt completes
+  const pendingMessageRef = useRef<string | null>(null);
+
+  // When status changes to waiting_input, deliver any pending message
+  useEffect(() => {
+    if (status === 'waiting_input' && pendingMessageRef.current) {
+      const queued = pendingMessageRef.current;
+      pendingMessageRef.current = null;
+      sendDirect(queued);
+    }
+  }, [status, sendDirect]);
+
   const handleSend = useCallback(async () => {
     const prompt = input.trim();
-    if (!prompt || sending) return;
+    if (!prompt) return;
     setInput('');
 
     // /clear resets the session server-side and clears local state
@@ -387,6 +619,13 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
         setStreamingBlocks([]);
         setMeta(prev => ({ ...prev, sessionId: null, turns: 0, totalCostUsd: 0, totalDurationMs: 0 }));
       } catch { /* ignore */ }
+      return;
+    }
+
+    // If currently processing, interrupt and queue the new message
+    if (isProcessing) {
+      pendingMessageRef.current = prompt;
+      await handleInterrupt();
       return;
     }
 
@@ -407,7 +646,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     } catch {
       setSending(false);
     }
-  }, [input, sending, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload]);
+  }, [input, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload, isProcessing, handleInterrupt]);
 
   // Autocomplete from server-provided slash commands
   const [acIndex, setAcIndex] = useState(0);
@@ -415,41 +654,76 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     if (!input.startsWith('/') || input.includes(' ')) return [];
     const query = input.slice(1).toLowerCase();
     const commands = sessionInfo?.slashCommands ?? [];
-    if (!query) return commands;
-    return commands.filter(c => c.toLowerCase().includes(query));
+    const filtered = query ? commands.filter(c => c.toLowerCase().includes(query)) : commands;
+    return filtered.map(parseSlashCommand);
   }, [input, sessionInfo?.slashCommands]);
   const showAutocomplete = acMatches.length > 0;
 
   useEffect(() => { setAcIndex(0); }, [acMatches.length]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // @ mention navigation
+    if (mentionActive && mentionResults.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMentionIndex(prev => Math.min(prev + 1, mentionResults.length - 1)); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setMentionIndex(prev => Math.max(prev - 1, 0)); return; }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault();
+        const selected = mentionResults[mentionIndex];
+        if (selected) {
+          // Replace @query with the selected item
+          const cursorPos = inputRef.current?.selectionStart ?? input.length;
+          const beforeCursor = input.slice(0, cursorPos);
+          const atIdx = beforeCursor.lastIndexOf('@');
+          if (atIdx >= 0) {
+            const newInput = input.slice(0, atIdx) + '@' + selected.insertText + ' ' + input.slice(cursorPos);
+            setInput(newInput);
+          }
+        }
+        setMentionActive(false);
+        setMentionQuery('');
+        return;
+      }
+      if (e.key === 'Escape') { e.preventDefault(); setMentionActive(false); setMentionQuery(''); return; }
+    }
+
+    // Slash command autocomplete
     if (showAutocomplete) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setAcIndex(prev => Math.min(prev + 1, acMatches.length - 1)); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setAcIndex(prev => Math.max(prev - 1, 0)); return; }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); if (acMatches[acIndex]) setInput(`/${acMatches[acIndex]} `); return; }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); if (acMatches[acIndex]) setInput(`/${acMatches[acIndex].raw} `); return; }
       if (e.key === 'Escape') { e.preventDefault(); setInput(''); return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
-  const isProcessing = status === 'processing';
+  // Detect @ in input to activate mention search
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    setInput(val);
+
+    const cursorPos = e.target.selectionStart ?? val.length;
+    const beforeCursor = val.slice(0, cursorPos);
+    const atIdx = beforeCursor.lastIndexOf('@');
+
+    if (atIdx >= 0 && (atIdx === 0 || /\s/.test(beforeCursor[atIdx - 1]))) {
+      const query = beforeCursor.slice(atIdx + 1);
+      if (!query.includes(' ') && query.length > 0) {
+        setMentionActive(true);
+        setMentionQuery(query);
+      } else {
+        setMentionActive(false);
+        setMentionQuery('');
+      }
+    } else {
+      setMentionActive(false);
+      setMentionQuery('');
+    }
+  }, [setInput]);
 
   // Separate streaming blocks into tools and text
   const streamingTools = streamingBlocks.filter(b => b.type === 'tool_use');
   const streamingTextBlocks = streamingBlocks.filter(b => b.type === 'text');
 
-  // Quick-action detection from last assistant message
-  const quickActions = useMemo(() => {
-    if (status !== 'waiting_input') return [];
-    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
-    if (!lastAssistant) return [];
-    const text = lastAssistant.content
-      .filter(b => b.type === 'text')
-      .map(b => b.text ?? '')
-      .join('\n')
-      .trim();
-    return parseQuickActions(text);
-  }, [messages, status]);
 
   return (
     <div className="flex h-full flex-col">
@@ -469,6 +743,21 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             )}
             {sessionInfo.cliVersion && (
               <span>v{sessionInfo.cliVersion}</span>
+            )}
+            {contextUsage && contextUsage.maxTokens > 0 && (
+              <span className="flex items-center gap-1.5" title={`${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.maxTokens.toLocaleString()} tokens`}>
+                <div className="h-1 w-16 overflow-hidden rounded-full bg-[#222]">
+                  <div
+                    className={`h-full rounded-full transition-all ${
+                      contextUsage.usedTokens / contextUsage.maxTokens > 0.9 ? 'bg-rose-400'
+                        : contextUsage.usedTokens / contextUsage.maxTokens > 0.7 ? 'bg-amber-400'
+                        : 'bg-emerald-400'
+                    }`}
+                    style={{ width: `${Math.min(100, (contextUsage.usedTokens / contextUsage.maxTokens) * 100)}%` }}
+                  />
+                </div>
+                <span>{Math.round((contextUsage.usedTokens / contextUsage.maxTokens) * 100)}% ctx</span>
+              </span>
             )}
           </div>
         </div>
@@ -494,6 +783,8 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
               textBlocks={streamingTextBlocks}
               isProcessing={isProcessing}
               streamingText={streamingText}
+              thinkingText={thinkingText}
+              toolProgress={toolProgress}
             />
           )}
 
@@ -508,7 +799,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             <UserQuestionForm
               questions={pendingQuestion.questions}
               onSubmit={submitQuestionAnswer}
-              onSkip={() => { setPendingQuestion(null); sendDirect('skip'); }}
+              onSkip={() => { setPendingQuestion(null); sendDirect('skip', true); }}
             />
           </div>
         </div>
@@ -520,32 +811,11 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
           permission={pendingPermission}
           onApproveSession={() => approveToolPersist(pendingPermission.toolName, 'session')}
           onApproveProject={() => approveToolPersist(pendingPermission.toolName, 'project')}
-          onReject={() => { dismissPermission(); sendDirect('no, try a different approach'); }}
+          onReject={() => { dismissPermission(); sendDirect('no, try a different approach', true); }}
         />
       )}
 
-      {/* Quick-action buttons */}
-      {quickActions.length > 0 && !pendingPermission && (
-        <div className="shrink-0 px-6 py-2">
-          <div className="mx-auto flex max-w-3xl flex-wrap gap-2">
-            {quickActions.map((action, i) => (
-              <button
-                key={i}
-                onClick={() => sendDirect(action.value)}
-                disabled={sending}
-                className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-1.5 text-left transition-colors hover:bg-[#222] disabled:opacity-50"
-              >
-                <span className="text-[13px] font-medium text-neutral-300">
-                  {action.value !== action.label ? `${action.value}. ` : ''}{action.label}
-                </span>
-                {action.description && (
-                  <span className="ml-1 text-[12px] text-neutral-600">{action.description}</span>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+
 
       {/* Input bar */}
       <div className="relative shrink-0">
@@ -557,11 +827,14 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
                 <div className="max-h-64 overflow-y-auto py-1">
                   {acMatches.map((cmd, i) => (
                     <button
-                      key={cmd}
-                      onMouseDown={e => { e.preventDefault(); setInput(`/${cmd} `); }}
-                      className={`flex w-full items-center px-3 py-1.5 text-left transition-colors ${i === acIndex ? 'bg-[#1e1e1e]' : 'hover:bg-[#1a1a1a]'}`}
+                      key={cmd.raw}
+                      onMouseDown={e => { e.preventDefault(); setInput(`/${cmd.raw} `); }}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${i === acIndex ? 'bg-[#1e1e1e]' : 'hover:bg-[#1a1a1a]'}`}
                     >
-                      <span className="text-[13px] font-medium text-neutral-300">/{cmd}</span>
+                      <span className="text-[13px] font-medium text-neutral-300">/{cmd.display}</span>
+                      <span className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${cmd.badgeColor}`}>
+                        {cmd.badge}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -574,18 +847,37 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             <div className="absolute bottom-full left-6 z-20 mb-1">
               <ContextMenuDropdown
                 onClose={() => setContextMenuOpen(false)}
-                onOpenPanel={(panel) => { setContextPanel(panel); setContextMenuOpen(false); }}
+                onOpenPanel={(panel) => {
+                  if (panel === 'upload') {
+                    setContextMenuOpen(false);
+                    uploadInputRef.current?.click();
+                  } else {
+                    setContextPanel(panel);
+                    setContextMenuOpen(false);
+                  }
+                }}
               />
             </div>
           )}
 
+          {/* Hidden file input for upload */}
+          <input
+            ref={uploadInputRef}
+            type="file"
+            multiple
+            accept="image/*,.txt,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.go,.java,.c,.cpp,.h,.css,.html,.xml,.yaml,.yml,.toml,.csv,.log,.sh,.bash,.zsh,.sql,.rb,.php,.swift,.kt,.scala"
+            className="hidden"
+            onChange={handleUploadFiles}
+          />
+
           {/* Context sub-panel */}
-          {contextPanel && (
+          {contextPanel && contextPanel !== 'upload' && (
             <div className="absolute bottom-full left-6 right-6 z-20 mb-1">
               <div className="mx-auto max-w-3xl">
                 <ContextSubPanel
                   panel={contextPanel}
                   instanceId={instanceId}
+                  sessionInfo={sessionInfo}
                   onAttach={(item) => {
                     setContextItems(prev => [...prev, item]);
                     setContextPanel(null);
@@ -620,6 +912,42 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             </div>
           )}
 
+          {/* @ mention dropdown */}
+          {mentionActive && mentionResults.length > 0 && (
+            <div className="absolute bottom-full left-6 right-6 z-20 mb-1">
+              <div className="mx-auto max-w-3xl overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#141414] shadow-xl">
+                <div className="max-h-48 overflow-y-auto py-1">
+                  {mentionResults.map((item, i) => {
+                    const info = extInfo(item.ext);
+                    return (
+                      <button
+                        key={item.insertText}
+                        onMouseDown={e => {
+                          e.preventDefault();
+                          const cursorPos = inputRef.current?.selectionStart ?? input.length;
+                          const beforeCursor = input.slice(0, cursorPos);
+                          const atIdx = beforeCursor.lastIndexOf('@');
+                          if (atIdx >= 0) {
+                            const newInput = input.slice(0, atIdx) + '@' + item.insertText + ' ' + input.slice(cursorPos);
+                            setInput(newInput);
+                          }
+                          setMentionActive(false);
+                          setMentionQuery('');
+                        }}
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${i === mentionIndex ? 'bg-[#1e1e1e]' : 'hover:bg-[#1a1a1a]'}`}
+                      >
+                        <span className={`rounded px-1 py-0.5 text-[9px] font-bold leading-none ${info.color}`}>
+                          {info.lang}
+                        </span>
+                        <span className="truncate text-[12px] text-neutral-300">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Textarea row */}
           <div className="flex items-center gap-2 pt-3 pb-2">
             {/* + context button */}
@@ -639,11 +967,11 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
               <textarea
                 ref={inputRef}
                 value={input}
-                onChange={e => setInput(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Follow-up on this task, @ for mentions, / for commands"
                 rows={1}
-                disabled={sending || status === 'exited'}
+                disabled={status === 'exited'}
                 className="flex-1 resize-none bg-transparent text-[14px] leading-snug text-neutral-300 placeholder-neutral-600 outline-none disabled:opacity-50"
                 style={{ minHeight: '20px', maxHeight: '120px' }}
                 onInput={e => {
@@ -705,7 +1033,11 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             <div className="relative">
               <button
                 onClick={() => { setEffortOpen(prev => !prev); setModelOpen(false); setPermissionOpen(false); setContextMenuOpen(false); }}
-                className="flex items-center gap-1 rounded-lg px-2 py-1 text-purple-400/70 transition-colors hover:bg-[#1a1a1a] hover:text-purple-400"
+                className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-colors hover:bg-[#1a1a1a] ${
+                  effortLevel === 'high' ? 'text-violet-300/70 hover:text-violet-300'
+                    : effortLevel === 'medium' ? 'text-blue-300/70 hover:text-blue-300'
+                    : 'text-neutral-400/70 hover:text-neutral-300'
+                }`}
               >
                 <BrainIcon className="h-4 w-4" />
               </button>
@@ -716,7 +1048,11 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
                     label: e.label,
                     sublabel: e.id === 'medium' ? 'Default' : undefined,
                     active: e.id === effortLevel,
-                    icon: <BrainIcon className="h-3.5 w-3.5" />,
+                    icon: <BrainIcon className={`h-3.5 w-3.5 ${
+                      e.id === 'high' ? 'text-violet-300'
+                        : e.id === 'medium' ? 'text-blue-300'
+                        : 'text-neutral-400'
+                    }`} />,
                   }))}
                   onSelect={(id) => { setEffortLevel(id); setEffortOpen(false); }}
                   onClose={() => setEffortOpen(false)}
@@ -728,15 +1064,25 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             {/* Spacer */}
             <div className="flex-1" />
 
-            {/* Send button */}
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || sending || status === 'exited'}
-              className="flex items-center gap-1.5 rounded-lg px-3 py-1 text-[12px] text-neutral-500 transition-colors hover:bg-[#1a1a1a] hover:text-neutral-300 disabled:opacity-30"
-            >
-              <span>Send</span>
-              <CornerDownLeft className="h-3 w-3" />
-            </button>
+            {/* Stop / Send button */}
+            {isProcessing ? (
+              <button
+                onClick={handleInterrupt}
+                className="flex items-center gap-1.5 rounded-lg bg-rose-500/15 px-3 py-1 text-[12px] text-rose-300 transition-colors hover:bg-rose-500/20"
+              >
+                <Square className="h-3 w-3" />
+                <span>Stop</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={!input.trim() || status === 'exited'}
+                className="flex items-center gap-1.5 rounded-lg px-3 py-1 text-[12px] text-neutral-500 transition-colors hover:bg-[#1a1a1a] hover:text-neutral-300 disabled:opacity-30"
+              >
+                <span>Send</span>
+                <CornerDownLeft className="h-3 w-3" />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -751,31 +1097,61 @@ function LiveWorkingBlock({
   textBlocks,
   isProcessing,
   streamingText,
+  thinkingText,
+  toolProgress,
 }: {
   tools: ContentBlock[];
   textBlocks: ContentBlock[];
   isProcessing: boolean;
   streamingText: string;
+  thinkingText: string;
+  toolProgress: { toolName: string; elapsedSeconds: number } | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const toolCount = tools.length;
   const hasStreamingText = streamingText.length > 0;
+  const hasThinking = thinkingText.length > 0;
 
   return (
     <div className="space-y-3">
+      {/* Thinking block — collapsible */}
+      {hasThinking && (
+        <div>
+          <button
+            onClick={() => setThinkingExpanded(!thinkingExpanded)}
+            className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+          >
+            {thinkingExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            <BrainIcon className="h-3.5 w-3.5 text-violet-400" />
+            <span className="text-violet-400/80">
+              {isProcessing && !hasStreamingText ? 'Thinking...' : 'Thought process'}
+            </span>
+            {isProcessing && !hasStreamingText && (
+              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+            )}
+          </button>
+          {thinkingExpanded && (
+            <div className="ml-5 mt-1.5 max-h-48 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 px-3 py-2">
+              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-500">{thinkingText}</p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tool actions header — only show when there are tools */}
-      {(toolCount > 0 || (isProcessing && !hasStreamingText)) && (
+      {(toolCount > 0 || (isProcessing && !hasStreamingText && !hasThinking)) && (
         <div>
           <button
             onClick={() => setExpanded(!expanded)}
             className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
           >
             {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            {isProcessing && !hasStreamingText && <Loader className="h-3 w-3 animate-spin text-blue-400" />}
-            {isProcessing && hasStreamingText && toolCount > 0 && <Loader className="h-3 w-3 animate-spin text-blue-400" />}
+            {isProcessing && !hasStreamingText && !hasThinking && <Loader className="h-3 w-3 animate-spin text-blue-300" />}
+            {isProcessing && hasStreamingText && toolCount > 0 && <Loader className="h-3 w-3 animate-spin text-blue-300" />}
             <span>
               {isProcessing
-                ? (toolCount > 0 ? `Working (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})` : 'Thinking...')
+                ? (toolCount > 0 ? `Working (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})` : 'Processing...')
                 : `Processed (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})`
               }
             </span>
@@ -794,6 +1170,15 @@ function LiveWorkingBlock({
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Tool progress indicator ��� real-time elapsed time during long tool runs */}
+      {toolProgress && isProcessing && (
+        <div className="flex items-center gap-2 text-[12px] text-neutral-600">
+          <Loader className="h-3 w-3 animate-spin text-blue-300" />
+          <span>{toolProgress.toolName}</span>
+          <span className="tabular-nums text-neutral-700">{Math.round(toolProgress.elapsedSeconds)}s</span>
         </div>
       )}
 
@@ -853,6 +1238,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     <div className="space-y-3">
       {groups.map((group, i) => {
         if (group.type === 'text') return <TextBlock key={i} text={group.text} />;
+        if (group.type === 'thinking') return <ThinkingBlock key={i} thinking={group.thinking} />;
         if (group.type === 'tool_group') return <ProcessedGroup key={i} tools={group.tools} />;
         return null;
       })}
@@ -863,14 +1249,15 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 // --- Group consecutive tool blocks ---
 
 interface TextGroup { type: 'text'; text: string }
+interface ThinkingGroup { type: 'thinking'; thinking: string }
 interface ToolEntry {
   name: string;
   input: unknown;
   toolUseId?: string;
-  result?: { content?: string; stdout?: string; stderr?: string; is_error?: boolean };
+  result?: { content?: string; stdout?: string; stderr?: string; is_error?: boolean; structuredPatch?: ContentBlock['structuredPatch'] };
 }
 interface ToolGroup { type: 'tool_group'; tools: ToolEntry[] }
-type BlockGroup = TextGroup | ToolGroup;
+type BlockGroup = TextGroup | ThinkingGroup | ToolGroup;
 
 function groupContentBlocks(blocks: ContentBlock[]): BlockGroup[] {
   const groups: BlockGroup[] = [];
@@ -892,8 +1279,15 @@ function groupContentBlocks(blocks: ContentBlock[]): BlockGroup[] {
           stdout: block.stdout,
           stderr: block.stderr,
           is_error: block.is_error,
+          structuredPatch: block.structuredPatch,
         };
       }
+    } else if (block.type === 'thinking' && block.thinking) {
+      if (currentTools.length > 0) {
+        groups.push({ type: 'tool_group', tools: [...currentTools] });
+        currentTools = [];
+      }
+      groups.push({ type: 'thinking', thinking: block.thinking });
     } else if (block.type === 'text' && block.text) {
       if (currentTools.length > 0) {
         groups.push({ type: 'tool_group', tools: [...currentTools] });
@@ -906,6 +1300,32 @@ function groupContentBlocks(blocks: ContentBlock[]): BlockGroup[] {
     groups.push({ type: 'tool_group', tools: currentTools });
   }
   return groups;
+}
+
+// --- Thinking block (collapsed by default in completed messages) ---
+
+function ThinkingBlock({ thinking }: { thinking: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const preview = thinking.slice(0, 80).replace(/\n/g, ' ');
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <BrainIcon className="h-3.5 w-3.5 text-violet-400/60" />
+        <span className="text-violet-400/50">Thought process</span>
+        {!expanded && <span className="max-w-[300px] truncate text-[11px] text-neutral-700">{preview}...</span>}
+      </button>
+      {expanded && (
+        <div className="ml-5 mt-1.5 max-h-64 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 px-3 py-2">
+          <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-500">{thinking}</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // --- Processed group (collapsed by default) ---
@@ -922,8 +1342,8 @@ function ProcessedGroup({ tools }: { tools: ToolEntry[] }) {
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         {hasErrors
-          ? <AlertTriangleIcon className="h-3 w-3 text-amber-500" />
-          : <Check className="h-3 w-3 text-green-500" />
+          ? <AlertTriangleIcon className="h-3 w-3 text-amber-300/70" />
+          : <Check className="h-3 w-3 text-emerald-300" />
         }
         <span>Processed ({tools.length} {tools.length === 1 ? 'action' : 'actions'})</span>
       </button>
@@ -974,7 +1394,7 @@ function getToolInfo(name: string, input: unknown, isLive: boolean): ToolInfo {
 function ToolLine({ name, input, result, isLive, isLast }: {
   name: string;
   input: unknown;
-  result?: { content?: string; stdout?: string; stderr?: string; is_error?: boolean };
+  result?: { content?: string; stdout?: string; stderr?: string; is_error?: boolean; structuredPatch?: ContentBlock['structuredPatch'] };
   isLive: boolean;
   isLast: boolean;
 }) {
@@ -983,7 +1403,8 @@ function ToolLine({ name, input, result, isLive, isLast }: {
   const shouldAnimate = isLive && isLast;
   const context = getToolContext(name, input);
   const [showDetails, setShowDetails] = useState(false);
-  const hasEditDiff = name === 'Edit' && !isLive;
+  const hasStructuredPatch = !isLive && result?.structuredPatch && result.structuredPatch.length > 0;
+  const hasEditDiff = (name === 'Edit' && !isLive) || hasStructuredPatch;
   const hasResult = !isLive && result && (result.stdout || result.stderr || result.content);
   const isExpandable = hasEditDiff || hasResult;
   const inp = input as Record<string, unknown> | null;
@@ -994,7 +1415,7 @@ function ToolLine({ name, input, result, isLive, isLast }: {
         onClick={() => isExpandable && setShowDetails(prev => !prev)}
         className={`flex items-center gap-2 text-[12px] text-neutral-600 ${isExpandable ? 'cursor-pointer hover:text-neutral-400' : ''}`}
       >
-        <Icon className={`h-3 w-3 shrink-0 ${shouldAnimate ? 'animate-pulse text-blue-400' : result?.is_error ? 'text-red-400' : 'text-neutral-600'}`} />
+        <Icon className={`h-3 w-3 shrink-0 ${shouldAnimate ? 'animate-pulse text-blue-300' : result?.is_error ? 'text-rose-300' : 'text-neutral-600'}`} />
         <span className={shouldAnimate ? 'text-neutral-400' : ''}>{info.label}</span>
         {isExpandable && (
           showDetails
@@ -1009,14 +1430,18 @@ function ToolLine({ name, input, result, isLive, isLast }: {
       )}
       {showDetails && (
         <div className="ml-5 mt-1 space-y-1">
-          {/* Edit diff */}
+          {/* Edit diff — prefer structured patch from tool result if available */}
           {hasEditDiff && inp && (
             <div className="overflow-x-auto rounded border border-[#1e1e1e] bg-[#0a0a0a] text-[11px]">
-              <EditDiffView
-                filePath={inp.file_path as string}
-                oldString={inp.old_string as string | undefined}
-                newString={inp.new_string as string | undefined}
-              />
+              {hasStructuredPatch ? (
+                <StructuredPatchView filePath={inp.file_path as string} patches={result!.structuredPatch!} />
+              ) : (
+                <EditDiffView
+                  filePath={inp.file_path as string}
+                  oldString={inp.old_string as string | undefined}
+                  newString={inp.new_string as string | undefined}
+                />
+              )}
             </div>
           )}
           {/* Tool stdout */}
@@ -1028,7 +1453,7 @@ function ToolLine({ name, input, result, isLive, isLast }: {
           )}
           {/* Tool stderr */}
           {result?.stderr && (
-            <pre className="max-h-24 overflow-auto rounded border border-red-900/20 bg-red-950/10 px-2 py-1.5 text-[11px] font-mono text-red-400/70">
+            <pre className="max-h-24 overflow-auto rounded border border-red-900/20 bg-red-950/10 px-2 py-1.5 text-[11px] font-mono text-rose-300/70">
               {result.stderr.slice(0, 1000)}
             </pre>
           )}
@@ -1118,7 +1543,7 @@ function PermissionPrompt({
       <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-blue-500/30 bg-[#141418]">
         {/* Header */}
         <div className="px-5 pt-4 pb-2">
-          <p className={`text-[13px] font-semibold ${isFileOp ? 'text-green-400' : isBash ? 'text-amber-400' : 'text-blue-400'}`}>
+          <p className={`text-[13px] font-semibold ${isFileOp ? 'text-emerald-300' : isBash ? 'text-amber-300' : 'text-blue-300'}`}>
             {toolLabel}
           </p>
           {fileName && (
@@ -1170,7 +1595,7 @@ function PermissionPrompt({
             onClick={onApproveSession}
             className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1a1a1e]"
           >
-            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-blue-600 text-[11px] font-semibold text-white">1</div>
+            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-blue-500/70 text-[11px] font-semibold text-white">1</div>
             <span className="text-[13px] font-medium text-neutral-300">Yes</span>
           </button>
           <button
@@ -1182,7 +1607,6 @@ function PermissionPrompt({
               <span className="block text-[13px] font-medium text-neutral-300">
                 Yes, allow all {isFileOp ? 'edits' : isBash ? 'commands' : 'uses'} during this session
               </span>
-              <span className="block text-[11px] text-neutral-600">{'\u21E7\u21E5'}</span>
             </div>
           </button>
           <button
@@ -1192,7 +1616,6 @@ function PermissionPrompt({
             <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-neutral-700/50 text-[11px] font-semibold text-neutral-400">3</div>
             <div className="min-w-0 flex-1">
               <span className="block text-[13px] font-medium text-neutral-300">No, and tell Claude what to do differently</span>
-              <span className="block text-[11px] text-neutral-600">{'\u238C'}</span>
             </div>
           </button>
         </div>
@@ -1214,18 +1637,18 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
     return (
       <div>
         <div className="flex items-center gap-2 border-b border-[#1e1e1e] bg-[#111] px-3 py-1.5">
-          <FilePlus className="h-3 w-3 text-green-500" />
+          <FilePlus className="h-3 w-3 text-emerald-300" />
           <span className="text-[11px] font-mono text-neutral-400">{shortPath}</span>
-          <span className="text-[10px] text-green-500/70">+{lines.length} lines</span>
+          <span className="text-[10px] text-emerald-300/70">+{lines.length} lines</span>
         </div>
         <div className="max-h-64 overflow-auto">
           <table className="w-full border-collapse font-mono text-[11px] leading-[18px]">
             <tbody>
               {lines.slice(0, 50).map((line, i) => (
-                <tr key={i} className="bg-green-950/15">
+                <tr key={i} className="bg-emerald-950/10">
                   <td className="w-10 select-none border-r border-[#1e1e1e] px-2 text-right text-neutral-700">{i + 1}</td>
-                  <td className="w-5 select-none px-1 text-center text-green-600">+</td>
-                  <td className="whitespace-pre-wrap break-all px-2 text-green-400/90">{line || ' '}</td>
+                  <td className="w-5 select-none px-1 text-center text-emerald-400/70">+</td>
+                  <td className="whitespace-pre-wrap break-all px-2 text-emerald-300/90">{line || ' '}</td>
                 </tr>
               ))}
               {lines.length > 50 && (
@@ -1249,11 +1672,11 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
     <div>
       {/* File header */}
       <div className="flex items-center gap-2 border-b border-[#1e1e1e] bg-[#111] px-3 py-1.5">
-        <Pencil className="h-3 w-3 text-blue-400" />
+        <Pencil className="h-3 w-3 text-blue-300" />
         <span className="text-[11px] font-mono text-neutral-400">{shortPath}</span>
         <div className="ml-auto flex items-center gap-2 text-[10px]">
-          {removedCount > 0 && <span className="text-red-400/70">-{removedCount}</span>}
-          {addedCount > 0 && <span className="text-green-500/70">+{addedCount}</span>}
+          {removedCount > 0 && <span className="text-rose-300/70">-{removedCount}</span>}
+          {addedCount > 0 && <span className="text-emerald-300/70">+{addedCount}</span>}
         </div>
       </div>
       {/* Diff lines */}
@@ -1261,13 +1684,13 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
         <table className="w-full border-collapse font-mono text-[11px] leading-[18px]">
           <tbody>
             {diff.slice(0, 80).map((d, i) => {
-              const bgClass = d.type === 'removed' ? 'bg-red-950/15'
-                : d.type === 'added' ? 'bg-green-950/15'
+              const bgClass = d.type === 'removed' ? 'bg-rose-950/10'
+                : d.type === 'added' ? 'bg-emerald-950/10'
                 : '';
               const numColor = d.type === 'same' ? 'text-neutral-700' : 'text-neutral-600';
-              const signColor = d.type === 'removed' ? 'text-red-500' : d.type === 'added' ? 'text-green-600' : 'text-neutral-800';
-              const textColor = d.type === 'removed' ? 'text-red-400/80'
-                : d.type === 'added' ? 'text-green-400/90'
+              const signColor = d.type === 'removed' ? 'text-rose-300/70' : d.type === 'added' ? 'text-emerald-400/70' : 'text-neutral-800';
+              const textColor = d.type === 'removed' ? 'text-rose-300/80'
+                : d.type === 'added' ? 'text-emerald-300/90'
                 : 'text-neutral-500';
               const sign = d.type === 'removed' ? '-' : d.type === 'added' ? '+' : ' ';
 
@@ -1287,6 +1710,74 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
             {diff.length > 80 && (
               <tr><td colSpan={4} className="px-3 py-1 text-neutral-600">...{diff.length - 80} more lines</td></tr>
             )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/** Render a structured patch from the SDK's tool_use_result — proper hunk-based diff */
+function StructuredPatchView({ filePath, patches }: { filePath: string; patches: NonNullable<ContentBlock['structuredPatch']> }) {
+  const shortPath = shortenPath(filePath ?? '');
+  let totalAdded = 0;
+  let totalRemoved = 0;
+  for (const hunk of patches) {
+    for (const line of hunk.lines) {
+      if (line.startsWith('+')) totalAdded++;
+      else if (line.startsWith('-')) totalRemoved++;
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 border-b border-[#1e1e1e] bg-[#111] px-3 py-1.5">
+        <Pencil className="h-3 w-3 text-blue-300" />
+        <span className="text-[11px] font-mono text-neutral-400">{shortPath}</span>
+        <div className="ml-auto flex items-center gap-2 text-[10px]">
+          {totalRemoved > 0 && <span className="text-rose-300/70">-{totalRemoved}</span>}
+          {totalAdded > 0 && <span className="text-emerald-300/70">+{totalAdded}</span>}
+        </div>
+      </div>
+      <div className="max-h-64 overflow-auto">
+        <table className="w-full border-collapse font-mono text-[11px] leading-[18px]">
+          <tbody>
+            {patches.map((hunk, hi) => {
+              let oldLine = hunk.oldStart;
+              let newLine = hunk.newStart;
+              return (
+                <React.Fragment key={hi}>
+                  {hi > 0 && (
+                    <tr><td colSpan={4} className="border-y border-[#1a1a1a] bg-[#0d0d0d] px-3 py-0.5 text-[10px] text-neutral-700">...</td></tr>
+                  )}
+                  {hunk.lines.slice(0, 100).map((line, li) => {
+                    const isRemoved = line.startsWith('-');
+                    const isAdded = line.startsWith('+');
+                    const isContext = !isRemoved && !isAdded;
+                    const bgClass = isRemoved ? 'bg-rose-950/10' : isAdded ? 'bg-emerald-950/10' : '';
+                    const numColor = isContext ? 'text-neutral-700' : 'text-neutral-600';
+                    const signColor = isRemoved ? 'text-rose-300/70' : isAdded ? 'text-emerald-400/70' : 'text-neutral-800';
+                    const textColor = isRemoved ? 'text-rose-300/80' : isAdded ? 'text-emerald-300/90' : 'text-neutral-500';
+                    const sign = isRemoved ? '-' : isAdded ? '+' : ' ';
+                    const oNum = isAdded ? '' : oldLine;
+                    const nNum = isRemoved ? '' : newLine;
+                    if (!isAdded) oldLine++;
+                    if (!isRemoved) newLine++;
+                    return (
+                      <tr key={`${hi}-${li}`} className={bgClass}>
+                        <td className={`w-8 select-none border-r border-[#1a1a1a] px-1.5 text-right ${numColor}`}>{oNum}</td>
+                        <td className={`w-8 select-none border-r border-[#1a1a1a] px-1.5 text-right ${numColor}`}>{nNum}</td>
+                        <td className={`w-4 select-none px-0.5 text-center ${signColor}`}>{sign}</td>
+                        <td className={`whitespace-pre-wrap break-all px-2 ${textColor}`}>{line.slice(1) || ' '}</td>
+                      </tr>
+                    );
+                  })}
+                  {hunk.lines.length > 100 && (
+                    <tr><td colSpan={4} className="px-3 py-1 text-neutral-600">...{hunk.lines.length - 100} more lines</td></tr>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -1351,86 +1842,6 @@ function shortenPath(fp: string): string {
   return parts.length > 3 ? '.../' + parts.slice(-3).join('/') : fp;
 }
 
-// --- Quick-action parsing ---
-
-interface QuickAction {
-  label: string;
-  description?: string;
-  value: string;
-  style: 'confirm' | 'danger' | 'neutral';
-}
-
-/** Strip markdown bold/italic markers */
-function stripMarkdown(s: string): string {
-  return s.replace(/\*\*(.+?)\*\*/g, '$1').replace(/__(.+?)__/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/_(.+?)_/g, '$1');
-}
-
-/** Extract a short title from an option line, splitting on — or - */
-function parseOptionTitle(raw: string): { title: string; description?: string } {
-  const clean = stripMarkdown(raw).trim();
-  // Split on em-dash, en-dash, or spaced hyphen
-  const sep = clean.match(/\s*[—–]\s*|\s+-\s+/);
-  if (sep && sep.index !== undefined) {
-    return {
-      title: clean.slice(0, sep.index).trim(),
-      description: clean.slice(sep.index + sep[0].length).trim(),
-    };
-  }
-  return { title: clean };
-}
-
-/** Detect if text ends with a question asking the user to pick/choose */
-function endsWithChoicePrompt(text: string): boolean {
-  const trimmed = text.trim();
-  // Must end with a question mark or a colon
-  if (!trimmed.endsWith('?') && !trimmed.endsWith(':')) return false;
-  // Check the last few lines for choice-related language
-  const tail = trimmed.split('\n').slice(-3).join(' ').toLowerCase();
-  return /(?:which|choose|select|pick|prefer|what|where|option|would you|do you want|like to|area|dive|want me)/.test(tail);
-}
-
-function parseQuickActions(text: string): QuickAction[] {
-  const lines = text.split('\n');
-  const lastLines = lines.slice(-5).join('\n');
-
-  // Yes/No patterns — only when explicitly asking
-  if (/\(y(?:es)?\/n(?:o)?\)/i.test(lastLines) || /(?:should I|do you want|would you like|shall I|want me to)\b.*\?/i.test(lastLines)) {
-    return [
-      { label: 'Yes', value: 'yes', style: 'neutral' },
-      { label: 'No', value: 'no', style: 'neutral' },
-    ];
-  }
-
-  // Permission / Allow patterns (Claude Code style)
-  if (/allow\b.*\?/i.test(lastLines) || /\bpermission\b/i.test(lastLines)) {
-    return [
-      { label: 'Allow', value: 'yes', style: 'neutral' },
-      { label: 'Deny', value: 'no', style: 'neutral' },
-    ];
-  }
-
-  // Numbered options — only show as quick actions if there's a clear choice prompt
-  // A numbered list alone (e.g. in an explanation) should NOT become buttons
-  if (!endsWithChoicePrompt(text)) return [];
-
-  // Find the last block of consecutive numbered lines
-  const optionPattern = /^(\d+)[.)]\s+(.+)$/gm;
-  const allOptions: QuickAction[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = optionPattern.exec(text)) !== null) {
-    const { title, description } = parseOptionTitle(match[2]);
-    allOptions.push({
-      label: title,
-      description,
-      value: match[1],
-      style: 'neutral',
-    });
-  }
-  if (allOptions.length >= 2 && allOptions.length <= 8) return allOptions;
-
-  return [];
-}
-
 // --- Options constants ---
 
 const MODEL_OPTIONS = [
@@ -1442,7 +1853,7 @@ const MODEL_OPTIONS = [
 const PERMISSION_OPTIONS = [
   { id: 'plan', label: 'Plan', description: 'Create plan before making changes', badgeBg: 'bg-amber-900/40', badgeText: 'text-amber-300/90' },
   { id: 'ask', label: 'Ask Permission', description: 'Prompt for permission on the first use of each tool', badgeBg: 'bg-sky-900/40', badgeText: 'text-sky-300/90' },
-  { id: 'auto-edit', label: 'Auto-Edit', description: 'Auto-accept file edit permissions', badgeBg: 'bg-orange-900/40', badgeText: 'text-orange-300/90' },
+  { id: 'auto-edit', label: 'Auto-Edit', description: 'Auto-accept file edit permissions', badgeBg: 'bg-orange-900/40', badgeText: 'text-orange-300/80/90' },
   { id: 'full-access', label: 'Full Access', description: 'Skip all permission prompts', badgeBg: 'bg-rose-900/40', badgeText: 'text-rose-300/90' },
 ] as const;
 
@@ -1470,12 +1881,10 @@ function BrainIcon({ className }: { className?: string }) {
 
 const CONTEXT_MENU_ITEMS = [
   { id: 'files', label: 'Files and Folders', icon: FileText },
-  { id: 'docs', label: 'Documentation', icon: BookOpen },
   { id: 'branches', label: 'Git Branches', icon: GitBranchIcon },
   { id: 'commits', label: 'Git Commits', icon: GitCommit },
   { id: 'changes', label: 'Local Changes', icon: FileDiff },
-  { id: 'mcp', label: 'MCP Server...', icon: Server },
-  { id: 'terminals', label: 'Terminals', icon: Terminal },
+  { id: 'mcp', label: 'MCP Servers', icon: Server },
   { id: 'upload', label: 'Upload from Computer...', icon: Upload },
 ] as const;
 
@@ -1614,14 +2023,14 @@ function UserQuestionForm({
                       key={oIdx}
                       onClick={() => toggle(qIdx, opt.label, multi)}
                       className={`flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
-                        isSelected ? 'bg-blue-600/20' : 'hover:bg-[#1a1a1e]'
+                        isSelected ? 'bg-blue-500/15' : 'hover:bg-[#1a1a1e]'
                       }`}
                     >
                       {/* Checkbox / Numbered indicator */}
                       {multi ? (
                         <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
                           isSelected
-                            ? 'border-blue-500 bg-blue-600 text-white'
+                            ? 'border-blue-500 bg-blue-500/70 text-white'
                             : 'border-neutral-600 bg-transparent'
                         }`}>
                           {isSelected && <Check className="h-3 w-3" />}
@@ -1629,7 +2038,7 @@ function UserQuestionForm({
                       ) : (
                         <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-semibold ${
                           isSelected
-                            ? 'bg-blue-600 text-white'
+                            ? 'bg-blue-500/70 text-white'
                             : 'bg-neutral-700/50 text-neutral-400'
                         }`}>
                           {oIdx + 1}
@@ -1670,10 +2079,10 @@ function UserQuestionForm({
         {hasSelection ? (
           <button
             onClick={handleSubmit}
-            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-blue-500"
+            className="flex items-center gap-2 rounded-lg bg-blue-500/70 px-4 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-blue-500"
           >
             Submit
-            <kbd className="flex items-center gap-0.5 rounded bg-blue-500/40 px-1.5 py-0.5 text-[10px] font-medium text-blue-200">&#x2318;&#x21B5;</kbd>
+            <kbd className="flex items-center gap-0.5 rounded bg-blue-400/30 px-1.5 py-0.5 text-[10px] font-medium text-blue-200">&#x2318;&#x21B5;</kbd>
           </button>
         ) : (
           <button
@@ -1724,7 +2133,7 @@ function PermissionDropdown({
             key={opt.id}
             onClick={() => onSelect(opt.id)}
             className={`flex w-full flex-col gap-0.5 px-3 py-2.5 text-left transition-colors ${
-              opt.id === selectedId ? 'bg-blue-600/20' : 'hover:bg-[#1a1a1a]'
+              opt.id === selectedId ? 'bg-blue-500/15' : 'hover:bg-[#1a1a1a]'
             }`}
           >
             <span className={`self-start rounded px-1.5 py-0.5 text-[12px] font-semibold ${opt.badgeBg} ${opt.badgeText}`}>
@@ -1754,9 +2163,11 @@ function ContextMenuDropdown({ onClose, onOpenPanel }: { onClose: () => void; on
   }, [onClose]);
 
   const handleItem = (id: string) => {
-    const panelItems = ['files', 'branches', 'commits', 'changes'];
+    const panelItems = ['files', 'branches', 'commits', 'changes', 'mcp'];
     if (panelItems.includes(id)) {
       onOpenPanel(id);
+    } else if (id === 'upload') {
+      onOpenPanel('upload');
     } else {
       onClose();
     }
@@ -1767,11 +2178,7 @@ function ContextMenuDropdown({ onClose, onOpenPanel }: { onClose: () => void; on
       ref={ref}
       className="min-w-[220px] overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#141414] shadow-xl"
     >
-      <div className="flex items-center gap-2 px-3 py-2">
-        <Search className="h-3.5 w-3.5 text-neutral-600" />
-        <span className="text-[12px] text-neutral-500">Search</span>
-      </div>
-      <div className="border-t border-[#1e1e1e] py-1">
+      <div className="py-1">
         {CONTEXT_MENU_ITEMS.map(item => {
           const Icon = item.icon;
           return (
@@ -1782,7 +2189,7 @@ function ContextMenuDropdown({ onClose, onOpenPanel }: { onClose: () => void; on
             >
               <Icon className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
               <span className="text-[13px] text-neutral-400">{item.label}</span>
-              {(item.id === 'files' || item.id === 'branches' || item.id === 'commits' || item.id === 'changes') && (
+              {['files', 'branches', 'commits', 'changes', 'mcp'].includes(item.id) && (
                 <ChevronRight className="ml-auto h-3 w-3 text-neutral-700" />
               )}
             </button>
@@ -1798,11 +2205,12 @@ function ContextMenuDropdown({ onClose, onOpenPanel }: { onClose: () => void; on
 interface ContextSubPanelProps {
   panel: string;
   instanceId: string;
+  sessionInfo?: SessionInfo | null;
   onAttach: (item: ContextItem) => void;
   onClose: () => void;
 }
 
-function ContextSubPanel({ panel, instanceId, onAttach, onClose }: ContextSubPanelProps) {
+function ContextSubPanel({ panel, instanceId, sessionInfo, onAttach, onClose }: ContextSubPanelProps) {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
   const [data, setData] = useState<unknown>(null);
@@ -1819,7 +2227,9 @@ function ContextSubPanel({ panel, instanceId, onAttach, onClose }: ContextSubPan
   }, [onClose]);
 
   useEffect(() => {
-    setLoading(true);
+    // MCP doesn't need async fetch from context API
+    if (panel === 'mcp') { setLoading(false); return; }
+
     const endpoint = `/api/instances/${instanceId}/context/${panel}`;
     fetch(endpoint)
       .then(r => r.json())
@@ -1845,7 +2255,10 @@ function ContextSubPanel({ panel, instanceId, onAttach, onClose }: ContextSubPan
     : panel === 'branches' ? 'Git Branches'
     : panel === 'commits' ? 'Git Commits'
     : panel === 'changes' ? 'Local Changes'
+    : panel === 'mcp' ? 'MCP Servers'
     : panel;
+
+  const showFilter = !['changes', 'mcp'].includes(panel);
 
   return (
     <div
@@ -1861,7 +2274,7 @@ function ContextSubPanel({ panel, instanceId, onAttach, onClose }: ContextSubPan
       </div>
 
       {/* Filter */}
-      {panel !== 'changes' && (
+      {showFilter && (
         <div className="border-b border-[#1e1e1e] px-3 py-2">
           <input
             type="text"
@@ -1898,6 +2311,8 @@ function ContextSubPanel({ panel, instanceId, onAttach, onClose }: ContextSubPan
               onAttach({ type: 'changes', label: `${d.files.length} changed files`, value: summary + '\n\n' + d.diffSummary });
             }
           }} />
+        ) : panel === 'mcp' ? (
+          <McpServersList sessionInfo={sessionInfo} />
         ) : null}
       </div>
     </div>
@@ -1985,8 +2400,8 @@ function ChangesList({ data, onAttach }: { data: unknown; onAttach: () => void }
 
   const statusColor = (s: string) => {
     if (s === 'M') return 'text-yellow-500';
-    if (s === 'A' || s === '??' || s === '??') return 'text-green-500';
-    if (s === 'D') return 'text-red-500';
+    if (s === 'A' || s === '??' || s === '??') return 'text-emerald-300';
+    if (s === 'D') return 'text-rose-300/70';
     return 'text-neutral-500';
   };
 
@@ -2001,12 +2416,38 @@ function ChangesList({ data, onAttach }: { data: unknown; onAttach: () => void }
       <div className="border-t border-[#1e1e1e] px-3 py-2">
         <button
           onClick={onAttach}
-          className="w-full rounded-lg bg-blue-600/80 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-blue-500/80"
+          className="w-full rounded-lg bg-blue-500/60 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-blue-500/80"
         >
           Attach all changes ({d.files.length} files)
         </button>
       </div>
     </div>
+  );
+}
+
+// --- MCP Servers list ---
+
+function McpServersList({ sessionInfo }: { sessionInfo?: SessionInfo | null }) {
+  const servers = sessionInfo?.mcpServers ?? [];
+  if (servers.length === 0) {
+    return <p className="py-4 text-center text-[12px] text-neutral-600">No MCP servers connected</p>;
+  }
+  return (
+    <>
+      {servers.map((server, i) => (
+        <div key={i} className="flex items-center gap-2 px-3 py-2 text-[12px]">
+          <Server className="h-3 w-3 shrink-0 text-neutral-600" />
+          <span className="flex-1 text-neutral-400">{server.name}</span>
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+            server.status === 'connected'
+              ? 'bg-green-900/30 text-emerald-300'
+              : 'bg-red-900/30 text-rose-300'
+          }`}>
+            {server.status}
+          </span>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -2032,7 +2473,7 @@ function TextBlock({ text }: { text: string }) {
           h1({ children }) { return <h1 className="mb-3 mt-5 text-[18px] font-semibold text-neutral-200">{children}</h1>; },
           h2({ children }) { return <h2 className="mb-2 mt-4 text-[16px] font-semibold text-neutral-200">{children}</h2>; },
           h3({ children }) { return <h3 className="mb-2 mt-3 text-[15px] font-semibold text-neutral-200">{children}</h3>; },
-          a({ href, children }) { return <a href={href} className="text-blue-400 underline decoration-blue-400/30 hover:decoration-blue-400" target="_blank" rel="noopener noreferrer">{children}</a>; },
+          a({ href, children }) { return <a href={href} className="text-blue-300 underline decoration-blue-400/30 hover:decoration-blue-400" target="_blank" rel="noopener noreferrer">{children}</a>; },
           blockquote({ children }) { return <blockquote className="mb-3 border-l-2 border-neutral-700 pl-3 text-neutral-400">{children}</blockquote>; },
           table({ children }) { return <div className="mb-3 overflow-x-auto"><table className="w-full border-collapse text-[13px]">{children}</table></div>; },
           th({ children }) { return <th className="border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-1.5 text-left text-neutral-300">{children}</th>; },

@@ -1,40 +1,21 @@
-import { spawn, type ChildProcess } from 'child_process';
 import path from 'path';
-import os from 'os';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import type {
+  Query,
+  SDKMessage,
+  SDKUserMessage,
+  CanUseTool,
+  PermissionResult,
+} from '@anthropic-ai/claude-agent-sdk';
+import type { BetaContentBlock } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import type { AppConfig } from './config.js';
 import type { TaskStore } from './task-store.js';
 
-function resolveClaudeBinary(): string {
-  const fs = require('fs') as typeof import('fs');
-  const candidates = [
-    path.join(os.homedir(), '.local', 'bin', 'claude'),
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-  ];
-  for (const candidate of candidates) {
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch { /* not found */ }
-  }
-  const pathDirs = (process.env.PATH ?? '').split(':');
-  for (const dir of pathDirs) {
-    const candidate = path.join(dir, 'claude');
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch { /* not found */ }
-  }
-  return 'claude';
-}
-
-// Event types from Claude Code stream-json
-interface StreamEvent {
-  type: 'system' | 'assistant' | 'user' | 'result' | 'rate_limit_event' | 'stream_event';
-  [key: string]: unknown;
-}
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -43,8 +24,9 @@ interface ChatMessage {
 }
 
 interface ContentBlock {
-  type: 'text' | 'tool_use' | 'tool_result';
+  type: 'text' | 'tool_use' | 'tool_result' | 'thinking';
   text?: string;
+  thinking?: string;
   name?: string;
   input?: unknown;
   tool_use_id?: string;
@@ -93,7 +75,6 @@ interface SpawnOptions {
   branchName?: string;
   continueSession?: boolean;
   sessionId?: string;
-  // Restored from stored task on resume
   totalCostUsd?: number;
   totalInputTokens?: number;
   totalOutputTokens?: number;
@@ -102,52 +83,128 @@ interface SpawnOptions {
   permissionMode?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Pending permission / user-question request — resolved from outside
+// ---------------------------------------------------------------------------
+
+interface PendingPermission {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  toolUseId: string;
+  filePath?: string;
+  title?: string;
+  description?: string;
+  resolve: (result: PermissionResult) => void;
+}
+
+interface PendingUserQuestion {
+  toolUseId: string;
+  questions: Array<{
+    question: string;
+    header?: string;
+    options?: Array<{ label: string; description?: string }>;
+    allowMultiple?: boolean;
+  }>;
+  resolve: (result: PermissionResult) => void;
+}
+
+// ---------------------------------------------------------------------------
+// Per-instance handle
+// ---------------------------------------------------------------------------
 
 interface ProcessHandle {
   instance: StreamInstance;
-  currentProcess: ChildProcess | null;
-  lineBuffer: string;
-  // Per-instance approved tools (for "ask" permission mode)
+  conversation: Query | null;
+  abortController: AbortController | null;
+  /** Async generator that feeds user messages into the conversation */
+  inputController: InputController | null;
+  /** Pending permission callback (one at a time) */
+  pendingPermission: PendingPermission | null;
+  /** Pending AskUserQuestion callback */
+  pendingUserQuestion: PendingUserQuestion | null;
+  /** Per-instance approved tools (for "ask" permission mode) */
   approvedTools: Set<string>;
-  // Track the last denied tool_use so we can show it to the user
-  lastDeniedTool: { toolName: string; toolInput: unknown; toolUseId: string; filePath?: string } | null;
 }
+
+// ---------------------------------------------------------------------------
+// InputController — a push-based AsyncIterable<SDKUserMessage>
+// ---------------------------------------------------------------------------
+
+class InputController {
+  private queue: SDKUserMessage[] = [];
+  private waiting: ((value: IteratorResult<SDKUserMessage>) => void) | null = null;
+  private done = false;
+
+  push(msg: SDKUserMessage): void {
+    if (this.done) return;
+    if (this.waiting) {
+      const resolve = this.waiting;
+      this.waiting = null;
+      resolve({ value: msg, done: false });
+    } else {
+      this.queue.push(msg);
+    }
+  }
+
+  end(): void {
+    this.done = true;
+    if (this.waiting) {
+      const resolve = this.waiting;
+      this.waiting = null;
+      resolve({ value: undefined as unknown as SDKUserMessage, done: true });
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: (): Promise<IteratorResult<SDKUserMessage>> => {
+        if (this.queue.length > 0) {
+          return Promise.resolve({ value: this.queue.shift()!, done: false });
+        }
+        if (this.done) {
+          return Promise.resolve({ value: undefined as unknown as SDKUserMessage, done: true });
+        }
+        return new Promise(resolve => { this.waiting = resolve; });
+      },
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// StreamProcessManager — now backed by the Agent SDK
+// ---------------------------------------------------------------------------
 
 export class StreamProcessManager extends EventEmitter {
   private handles = new Map<string, ProcessHandle>();
-  private readonly claudeBinary: string;
   private cachedSlashCommands: string[] | null = null;
 
   constructor(private config: AppConfig, private taskStore?: TaskStore) {
     super();
-    this.claudeBinary = resolveClaudeBinary();
-    console.log(`[stream-process] Using claude binary: ${this.claudeBinary}`);
   }
 
   getSlashCommands(): string[] {
     return this.cachedSlashCommands ?? [];
   }
 
-  /** Pre-fetch slash commands by running a quick no-op claude invocation */
-  async prefetchSlashCommands(): Promise<void> {
-    if (this.cachedSlashCommands) return;
+  /** Pre-fetch slash commands by spawning a short-lived SDK query */
+  async prefetchSlashCommands(force = false): Promise<void> {
+    if (this.cachedSlashCommands && !force) return;
     try {
-      const { execSync } = require('child_process') as typeof import('child_process');
-      const output = execSync(
-        `${this.claudeBinary} --print --output-format stream-json --verbose --max-turns 0 ""`,
-        { encoding: 'utf-8', timeout: 30_000, cwd: os.homedir() }
-      );
-      for (const line of output.split('\n')) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line);
-          if (event.type === 'system' && event.slash_commands) {
-            this.cachedSlashCommands = event.slash_commands as string[];
-            console.log(`[stream-process] Pre-fetched ${this.cachedSlashCommands.length} slash commands`);
-            return;
-          }
-        } catch { /* skip non-json */ }
+      const conversation = query({
+        prompt: 'hi',
+        options: {
+          maxTurns: 0,
+          persistSession: false,
+        },
+      });
+      for await (const msg of conversation) {
+        if (msg.type === 'system' && msg.subtype === 'init') {
+          this.cachedSlashCommands = msg.slash_commands ?? [];
+          console.log(`[stream-process] Pre-fetched ${this.cachedSlashCommands.length} slash commands`);
+          break;
+        }
       }
+      conversation.close();
     } catch (err) {
       console.log('[stream-process] Failed to pre-fetch slash commands:', err);
     }
@@ -184,10 +241,12 @@ export class StreamProcessManager extends EventEmitter {
 
     const handle: ProcessHandle = {
       instance,
-      currentProcess: null,
-      lineBuffer: '',
+      conversation: null,
+      abortController: null,
+      inputController: null,
+      pendingPermission: null,
+      pendingUserQuestion: null,
       approvedTools: new Set<string>(),
-      lastDeniedTool: null,
     };
 
     this.handles.set(id, handle);
@@ -206,6 +265,10 @@ export class StreamProcessManager extends EventEmitter {
     return instance;
   }
 
+  // -------------------------------------------------------------------------
+  // sendMessage — the core entry point for sending a user prompt
+  // -------------------------------------------------------------------------
+
   async sendMessage(instanceId: string, prompt: string, options?: {
     model?: string;
     permissionMode?: string;
@@ -217,7 +280,6 @@ export class StreamProcessManager extends EventEmitter {
 
     const handle = this.handles.get(instanceId);
     if (!handle) throw new Error(`Instance ${instanceId} not found`);
-    if (handle.currentProcess) throw new Error('Instance is already processing');
 
     const instance = handle.instance;
     const cwd = instance.worktreePath ?? instance.projectPath;
@@ -226,8 +288,7 @@ export class StreamProcessManager extends EventEmitter {
     if (options?.effort) instance.effort = options.effort;
     if (options?.permissionMode) instance.permissionMode = options.permissionMode;
 
-    // Build the display message (clean, no context content)
-    // Hidden messages (e.g. permission re-sends) are not shown in the chat
+    // Build the display message (hidden messages like permission re-sends skip this)
     if (!options?.hidden) {
       const userMessage: ChatMessage & { contextAttachments?: { type: string; label: string }[] } = {
         role: 'user',
@@ -241,7 +302,7 @@ export class StreamProcessManager extends EventEmitter {
       this.emit('message', instanceId, userMessage);
     }
 
-    // Build the full CLI prompt with context prepended (sent to Claude, not displayed)
+    // Build the full prompt with context prepended
     let cliPrompt = prompt;
     if (options?.context && options.context.length > 0) {
       const contextParts = options.context.map(c => {
@@ -261,385 +322,426 @@ export class StreamProcessManager extends EventEmitter {
     instance.lastActivity = new Date();
     this.emit('status', instanceId, INSTANCE_STATUS.PROCESSING);
 
-    // All modes use --print (one-shot, non-interactive).
-    // Permission control is handled via --allowedTools and --dangerously-skip-permissions.
-    // The stream-json output shows exactly what Claude did (tool_use + tool_result events).
-    const args = [
-      '--print',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--include-partial-messages',
-    ];
-
-    // Model override
-    if (options?.model) {
-      args.push('--model', options.model);
-    }
-
-    // Effort level
-    if (options?.effort) {
-      args.push('--effort', options.effort);
-    }
-
-    // Permission mode mapping — dashboard modes → CLI permission flags
-    const mode = options?.permissionMode ?? 'ask';
-    switch (mode) {
-      case 'plan':
-        args.push('--permission-mode', 'plan');
-        break;
-      case 'ask':
-        args.push('--permission-mode', 'default');
-        break;
-      case 'auto-edit':
-        args.push('--permission-mode', 'acceptEdits');
-        break;
-      case 'full-access':
-        args.push('--permission-mode', 'bypassPermissions');
-        break;
-      default:
-        args.push('--permission-mode', 'default');
-    }
-
-    // Pass previously approved tools so Claude can use them without denial
-    const approved = this.getApprovedTools(instanceId);
-    if (approved.size > 0) {
-      args.push('--allowedTools', [...approved].join(','));
-    }
-
-    if (instance.sessionId) {
-      args.push('--resume', instance.sessionId);
-    }
-
-    // Add the prompt (with context baked in for Claude, but not displayed in chat)
-    args.push(cliPrompt);
-
-    // Build env
-    const env = { ...process.env } as Record<string, string>;
-    const extraPaths = [
-      path.join(os.homedir(), '.local', 'bin'),
-      '/usr/local/bin',
-      '/opt/homebrew/bin',
-    ];
-    const currentPath = env.PATH ?? '';
-    const pathParts = currentPath.split(':');
-    for (const p of extraPaths) {
-      if (!pathParts.includes(p)) pathParts.unshift(p);
-    }
-    env.PATH = pathParts.join(':');
-    for (const key of Object.keys(env)) {
-      if (key === 'CLAUDECODE' || key.startsWith('CLAUDE_CODE_')) {
-        delete env[key];
+    // If there's already a live conversation, feed the new message into it
+    if (handle.conversation && handle.inputController) {
+      // Live conversation — update model/permissionMode if changed
+      if (options?.model) {
+        handle.conversation.setModel(options.model).catch(err => {
+          console.log(`[stream-process] Failed to set model: ${err}`);
+        });
       }
-    }
-
-    console.log(`[stream-process] Running: ${this.claudeBinary} ${args.join(' ').slice(0, 200)}... in ${cwd}`);
-    console.log(`[stream-process] Prompt length: ${cliPrompt.length}, first 80 chars: ${cliPrompt.slice(0, 80)}`);
-
-    const proc = spawn(this.claudeBinary, args, {
-      cwd,
-      env,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    // Close stdin immediately — prompt is passed as CLI argument, not via stdin
-    proc.stdin?.end();
-
-    handle.currentProcess = proc;
-    handle.lineBuffer = '';
-    handle.lastDeniedTool = null;
-
-    // Accumulate assistant content blocks for the current turn
-    let assistantBlocks: ContentBlock[] = [];
-
-    proc.stdout?.on('data', (chunk: Buffer) => {
-      handle.lineBuffer += chunk.toString();
-      const lines = handle.lineBuffer.split('\n');
-      handle.lineBuffer = lines.pop() ?? '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line) as StreamEvent;
-          this.handleEvent(instanceId, event, assistantBlocks);
-        } catch {
-          // Not valid JSON, skip
-        }
-      }
-    });
-
-    proc.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      if (text.trim()) {
-        console.log(`[stream-process] stderr ${instanceId}: ${text.trim()}`);
-      }
-    });
-
-    proc.on('close', (code) => {
-      handle.currentProcess = null;
-
-      // Flush any remaining assistant blocks as a message
-      if (assistantBlocks.length > 0) {
-        const msg: ChatMessage = {
-          role: 'assistant',
-          content: assistantBlocks,
-          timestamp: new Date().toISOString(),
-        };
-        instance.messages.push(msg);
-        this.emit('message', instanceId, msg);
-        assistantBlocks = [];
-      }
-
-      if (code !== 0 && code !== null) {
-        console.log(`[stream-process] Process exited with code ${code}`);
-      }
-
-      // Persist messages to disk
-      if (this.taskStore && instance.messages.length > 0) {
-        this.taskStore.saveMessages(instanceId, instance.messages).catch(err => {
-          console.log(`[stream-process] Failed to persist messages: ${err}`);
+      if (options?.permissionMode) {
+        const sdkMode = this.mapPermissionMode(options.permissionMode);
+        handle.conversation.setPermissionMode(sdkMode).catch(err => {
+          console.log(`[stream-process] Failed to set permission mode: ${err}`);
         });
       }
 
-      instance.status = INSTANCE_STATUS.WAITING_INPUT;
-      instance.lastActivity = new Date();
-      this.emit('status', instanceId, INSTANCE_STATUS.WAITING_INPUT);
+      handle.inputController.push({
+        type: 'user',
+        message: { role: 'user', content: cliPrompt },
+        parent_tool_use_id: null,
+        session_id: instance.sessionId ?? '',
+      });
+      return;
+    }
+
+    // No existing conversation — start a new one
+    const abortController = new AbortController();
+    const inputController = new InputController();
+
+    handle.abortController = abortController;
+    handle.inputController = inputController;
+
+    // Permission mode mapping
+    const sdkPermissionMode = this.mapPermissionMode(options?.permissionMode ?? instance.permissionMode ?? 'ask');
+
+    // Build allowed tools from previously approved tools
+    const allowedTools = [...handle.approvedTools];
+
+    // The canUseTool callback — this is the game-changer
+    const canUseTool: CanUseTool = async (toolName, input, callbackOptions) => {
+      // AskUserQuestion — Claude wants to ask the user something
+      if (toolName === 'AskUserQuestion') {
+        const questions = (input as { questions?: unknown[] }).questions;
+        if (questions && Array.isArray(questions)) {
+          return new Promise<PermissionResult>(resolve => {
+            handle.pendingUserQuestion = {
+              toolUseId: callbackOptions.toolUseID,
+              questions: questions as PendingUserQuestion['questions'],
+              resolve,
+            };
+            this.emit('user_question', instanceId, {
+              toolUseId: callbackOptions.toolUseID,
+              questions,
+            });
+          });
+        }
+        return { behavior: 'allow' as const, updatedInput: input };
+      }
+
+      // Already approved tools pass through
+      if (handle.approvedTools.has(toolName)) {
+        return { behavior: 'allow' as const, updatedInput: input };
+      }
+
+      // Emit permission request to frontend, wait for user decision
+      return new Promise<PermissionResult>(resolve => {
+        const filePath = (input as Record<string, unknown>).file_path as string
+          ?? (input as Record<string, unknown>).command as string
+          ?? undefined;
+
+        handle.pendingPermission = {
+          toolName,
+          toolInput: input,
+          toolUseId: callbackOptions.toolUseID,
+          filePath,
+          title: callbackOptions.title,
+          description: callbackOptions.description,
+          resolve,
+        };
+
+        this.emit('permission_request', instanceId, {
+          toolName,
+          toolInput: input,
+          toolUseId: callbackOptions.toolUseID,
+          filePath,
+          title: callbackOptions.title,
+          description: callbackOptions.description,
+        });
+      });
+    };
+
+    // Build SDK options
+    const sdkOptions: Parameters<typeof query>[0]['options'] = {
+      cwd,
+      abortController,
+      systemPrompt: { type: 'preset', preset: 'claude_code' },
+      settingSources: ['project', 'local'],
+      permissionMode: sdkPermissionMode,
+      allowedTools,
+      canUseTool,
+      includePartialMessages: true,
+      effort: this.mapEffort(options?.effort ?? instance.effort),
+      persistSession: true,
+      enableFileCheckpointing: true,
+    };
+
+    if (options?.model ?? instance.model) {
+      sdkOptions.model = options?.model ?? instance.model ?? undefined;
+    }
+
+    // Resume previous session if we have a sessionId
+    if (instance.sessionId) {
+      sdkOptions.resume = instance.sessionId;
+    }
+
+    // Push the initial message into the input controller
+    inputController.push({
+      type: 'user',
+      message: { role: 'user', content: cliPrompt },
+      parent_tool_use_id: null,
+      session_id: instance.sessionId ?? '',
+    });
+
+    // Start the conversation with the streaming input
+    const conversation = query({
+      prompt: inputController,
+      options: sdkOptions,
+    });
+    handle.conversation = conversation;
+
+    // Process messages in background
+    this.processConversation(instanceId, conversation).catch(err => {
+      console.log(`[stream-process] Conversation error for ${instanceId}:`, err);
     });
   }
 
-  private handleEvent(instanceId: string, event: StreamEvent, assistantBlocks: ContentBlock[]): void {
+  // -------------------------------------------------------------------------
+  // processConversation — async loop that consumes SDK messages
+  // -------------------------------------------------------------------------
+
+  private async processConversation(instanceId: string, conversation: Query): Promise<void> {
     const handle = this.handles.get(instanceId);
     if (!handle) return;
     const instance = handle.instance;
 
-    switch (event.type) {
-      case 'system': {
-        const sys = event as {
-          session_id?: string;
-          model?: string;
-          subtype?: string;
-          tools?: string[];
-          mcp_servers?: { name: string; status: string }[];
-          permissionMode?: string;
-          claude_code_version?: string;
-          slash_commands?: string[];
-          // Agent task events
-          task_id?: string;
-          tool_use_id?: string;
-          description?: string;
-          task_type?: string;
-          status?: string;
-          last_tool_name?: string;
-          usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number };
-        };
+    let assistantBlocks: ContentBlock[] = [];
 
-        // Agent task lifecycle events
-        if (sys.subtype === 'task_started') {
+    try {
+      for await (const msg of conversation) {
+        // Instance may have been killed while we were iterating
+        if (!this.handles.has(instanceId)) break;
+
+        this.handleSDKMessage(instanceId, msg, assistantBlocks);
+
+        // A `result` message means the turn is complete — flush blocks,
+        // persist, and transition to WAITING_INPUT so the user can send
+        // the next message.  The loop stays alive for the next turn.
+        if (msg.type === 'result') {
+          if (assistantBlocks.length > 0) {
+            const chatMsg: ChatMessage = {
+              role: 'assistant',
+              content: assistantBlocks,
+              timestamp: new Date().toISOString(),
+            };
+
+            // Deduplicate: skip if the text content is identical to the
+            // last assistant message (happens when Claude retries denied
+            // tools across multiple turns, producing the same response).
+            const lastAssistant = [...instance.messages].reverse().find(m => m.role === 'assistant');
+            const newText = this.extractText(chatMsg.content);
+            const prevText = lastAssistant ? this.extractText(lastAssistant.content) : '';
+            const isDuplicate = newText.length > 0 && newText === prevText;
+
+            if (!isDuplicate) {
+              instance.messages.push(chatMsg);
+              this.emit('message', instanceId, chatMsg);
+            }
+            assistantBlocks = [];
+          }
+
+          // Persist messages to disk
+          if (this.taskStore && instance.messages.length > 0) {
+            this.taskStore.saveMessages(instanceId, instance.messages).catch(err => {
+              console.log(`[stream-process] Failed to persist messages: ${err}`);
+            });
+          }
+
+          instance.status = INSTANCE_STATUS.WAITING_INPUT;
+          instance.lastActivity = new Date();
+          this.emit('status', instanceId, INSTANCE_STATUS.WAITING_INPUT);
+        }
+      }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.log(`[stream-process] Conversation aborted for ${instanceId}`);
+      } else {
+        console.log(`[stream-process] Conversation error for ${instanceId}:`, err);
+      }
+    }
+
+    // Flush any remaining assistant blocks on conversation end (with dedup)
+    if (assistantBlocks.length > 0) {
+      const chatMsg: ChatMessage = {
+        role: 'assistant',
+        content: assistantBlocks,
+        timestamp: new Date().toISOString(),
+      };
+      const lastAssistant = [...instance.messages].reverse().find(m => m.role === 'assistant');
+      const newText = this.extractText(chatMsg.content);
+      const prevText = lastAssistant ? this.extractText(lastAssistant.content) : '';
+      if (!(newText.length > 0 && newText === prevText)) {
+        instance.messages.push(chatMsg);
+        this.emit('message', instanceId, chatMsg);
+      }
+    }
+
+    // Final persist
+    if (this.taskStore && instance.messages.length > 0) {
+      this.taskStore.saveMessages(instanceId, instance.messages).catch(err => {
+        console.log(`[stream-process] Failed to persist messages: ${err}`);
+      });
+    }
+
+    // Conversation has ended (closed, killed, or errored) — clean up
+    handle.conversation = null;
+    handle.abortController = null;
+    handle.inputController = null;
+
+    if (instance.status !== INSTANCE_STATUS.EXITED) {
+      instance.status = INSTANCE_STATUS.WAITING_INPUT;
+      instance.lastActivity = new Date();
+      this.emit('status', instanceId, INSTANCE_STATUS.WAITING_INPUT);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // handleSDKMessage — maps SDK events to our internal events
+  // -------------------------------------------------------------------------
+
+  private handleSDKMessage(instanceId: string, msg: SDKMessage, assistantBlocks: ContentBlock[]): void {
+    const handle = this.handles.get(instanceId);
+    if (!handle) return;
+    const instance = handle.instance;
+
+    switch (msg.type) {
+      case 'system': {
+        if (msg.subtype === 'init') {
+          if (msg.session_id) instance.sessionId = msg.session_id;
+          if (msg.model) instance.model = msg.model;
+          if (msg.permissionMode) instance.permissionMode = msg.permissionMode;
+          if (msg.slash_commands) {
+            this.cachedSlashCommands = msg.slash_commands;
+          }
+          this.emit('session', instanceId, {
+            sessionId: msg.session_id,
+            model: msg.model,
+            tools: msg.tools,
+            mcpServers: msg.mcp_servers,
+            permissionMode: msg.permissionMode,
+            cliVersion: msg.claude_code_version,
+            slashCommands: msg.slash_commands,
+          });
+        } else if (msg.subtype === 'task_started') {
+          const m = msg as SDKMessage & { task_id: string; tool_use_id?: string; description: string; task_type?: string };
           this.emit('agent_event', instanceId, {
             event: 'started',
-            taskId: sys.task_id,
-            toolUseId: sys.tool_use_id,
-            description: sys.description,
-            taskType: sys.task_type,
+            taskId: m.task_id,
+            toolUseId: m.tool_use_id,
+            description: m.description,
+            taskType: m.task_type,
           });
-          break;
-        }
-        if (sys.subtype === 'task_progress') {
+        } else if (msg.subtype === 'task_progress') {
+          const m = msg as SDKMessage & { task_id: string; tool_use_id?: string; description: string; last_tool_name?: string; usage?: unknown };
           this.emit('agent_event', instanceId, {
             event: 'progress',
-            taskId: sys.task_id,
-            toolUseId: sys.tool_use_id,
-            description: sys.description,
-            lastToolName: sys.last_tool_name,
-            usage: sys.usage,
+            taskId: m.task_id,
+            toolUseId: m.tool_use_id,
+            description: m.description,
+            lastToolName: m.last_tool_name,
+            usage: m.usage,
           });
-          break;
-        }
-        if (sys.subtype === 'task_notification') {
+        } else if (msg.subtype === 'task_notification') {
+          const m = msg as SDKMessage & { task_id: string; tool_use_id?: string; status: string; summary: string; usage?: unknown };
           this.emit('agent_event', instanceId, {
             event: 'completed',
-            taskId: sys.task_id,
-            toolUseId: sys.tool_use_id,
-            status: sys.status,
-            description: sys.description,
-            usage: sys.usage,
+            taskId: m.task_id,
+            toolUseId: m.tool_use_id,
+            status: m.status,
+            description: m.summary,
+            usage: m.usage,
           });
-          break;
         }
+        break;
+      }
 
-        // Session init
-        if (sys.session_id) instance.sessionId = sys.session_id;
-        if (sys.model) instance.model = sys.model;
-        if (sys.permissionMode) instance.permissionMode = sys.permissionMode;
-        if (sys.slash_commands) {
-          this.cachedSlashCommands = sys.slash_commands;
-        }
-        this.emit('session', instanceId, {
-          sessionId: sys.session_id,
-          model: sys.model,
-          tools: sys.tools,
-          mcpServers: sys.mcp_servers,
-          permissionMode: sys.permissionMode,
-          cliVersion: sys.claude_code_version,
-          slashCommands: sys.slash_commands,
+      case 'tool_progress': {
+        // Real-time tool execution progress (e.g. "Reading file...", "Running bash for 12s...")
+        const tp = msg as unknown as {
+          tool_use_id: string; tool_name: string;
+          elapsed_time_seconds: number; task_id?: string;
+        };
+        this.emit('tool_progress', instanceId, {
+          toolUseId: tp.tool_use_id,
+          toolName: tp.tool_name,
+          elapsedSeconds: tp.elapsed_time_seconds,
+          taskId: tp.task_id,
         });
         break;
       }
 
       case 'assistant': {
-        const message = (event as { message?: { content?: ContentBlock[] } }).message;
-        if (message?.content) {
-          for (const block of message.content) {
-            assistantBlocks.push(block);
-            this.emit('content_block', instanceId, block);
-
-            // Detect AskUserQuestion — Claude wants to ask the user something
-            if (block.type === 'tool_use' && block.name === 'AskUserQuestion') {
-              const inp = block.input as { questions?: Array<{
-                question: string;
-                header?: string;
-                options?: Array<{ label: string; description?: string }>;
-                allowMultiple?: boolean;
-              }> } | null;
-              if (inp?.questions) {
-                this.emit('user_question', instanceId, {
-                  toolUseId: block.tool_use_id,
-                  questions: inp.questions,
-                });
-              }
-            }
+        // Accumulate content blocks within the turn — do NOT flush here.
+        // Flushing happens on `result` so all tool calls in a turn are
+        // grouped into a single ChatMessage on the frontend.
+        const content = msg.message?.content;
+        if (content && Array.isArray(content)) {
+          for (const block of content) {
+            const mapped = this.mapContentBlock(block);
+            assistantBlocks.push(mapped);
+            this.emit('content_block', instanceId, mapped);
           }
         }
         break;
       }
 
       case 'user': {
-        const message = (event as { message?: { content?: ContentBlock[] } }).message;
-        const toolUseResult = (event as { tool_use_result?: unknown }).tool_use_result;
-
-        // Detect permission denials from the CLI
-        // The tool_use_result can be a string or an object — check both forms
-        const resultStr = typeof toolUseResult === 'string'
-          ? toolUseResult
-          : (toolUseResult as { stdout?: string })?.stdout ?? '';
-        const errorContent = message?.content?.find(b => b.type === 'tool_result' && b.is_error)?.content;
-        const denialText = (typeof errorContent === 'string' ? errorContent : '') || resultStr;
-
-        if (denialText.includes('requested permissions')) {
-          const lastToolUse = assistantBlocks.filter(b => b.type === 'tool_use').pop();
-          if (lastToolUse) {
-            const inp = lastToolUse.input as Record<string, unknown> | null;
-            handle.lastDeniedTool = {
-              toolName: lastToolUse.name ?? 'Unknown',
-              toolInput: lastToolUse.input,
-              toolUseId: lastToolUse.tool_use_id ?? '',
-              filePath: (inp?.file_path as string) ?? (inp?.command as string) ?? undefined,
-            };
-            this.emit('permission_request', instanceId, handle.lastDeniedTool);
-          }
-        }
-
-        // Forward tool results to the client, enriched with structured data
-        if (message?.content) {
-          for (const block of message.content) {
-            if (block.type === 'tool_result') {
-              // Enrich with structured tool_use_result data if available
-              const enriched = { ...block };
-              if (toolUseResult && typeof toolUseResult === 'object') {
-                const tur = toolUseResult as {
-                  stdout?: string; stderr?: string; interrupted?: boolean;
-                  isImage?: boolean; filePath?: string;
-                  structuredPatch?: unknown;
-                };
-                if (tur.stdout !== undefined) enriched.stdout = tur.stdout;
-                if (tur.stderr !== undefined) enriched.stderr = tur.stderr;
-                if (tur.structuredPatch !== undefined) enriched.structuredPatch = tur.structuredPatch;
+        // User messages include tool results — forward them
+        const content = msg.message?.content;
+        if (content && Array.isArray(content)) {
+          for (const block of content) {
+            const b = block as unknown as Record<string, unknown>;
+            if (b.type === 'tool_result') {
+              const mapped: ContentBlock = {
+                type: 'tool_result',
+                tool_use_id: b.tool_use_id as string,
+                content: typeof b.content === 'string' ? b.content : JSON.stringify(b.content),
+                is_error: b.is_error as boolean | undefined,
+              };
+              // Enrich with structured data from tool_use_result if available
+              const toolResult = (msg as Record<string, unknown>).tool_use_result;
+              if (toolResult && typeof toolResult === 'object') {
+                const tur = toolResult as Record<string, unknown>;
+                if (tur.stdout !== undefined) mapped.stdout = tur.stdout as string;
+                if (tur.stderr !== undefined) mapped.stderr = tur.stderr as string;
+                if (tur.structuredPatch !== undefined) mapped.structuredPatch = tur.structuredPatch;
               }
-              this.emit('content_block', instanceId, enriched);
+              assistantBlocks.push(mapped);
+              this.emit('content_block', instanceId, mapped);
             }
           }
         }
         break;
       }
 
-      case 'result': {
-        const result = event as {
-          total_cost_usd?: number;
-          duration_ms?: number;
-          session_id?: string;
-          stop_reason?: string;
-          usage?: { input_tokens?: number; output_tokens?: number };
-          permission_denials?: Array<{
-            tool_name: string; tool_use_id: string; tool_input: unknown;
-          }>;
-        };
-        if (result.total_cost_usd) {
-          instance.totalCostUsd += result.total_cost_usd;
+      case 'stream_event': {
+        // Partial streaming events for real-time text display
+        const event = (msg as Record<string, unknown>).event as Record<string, unknown> | undefined;
+        if (!event) break;
+
+        const eventType = event.type as string;
+        if (eventType === 'content_block_delta') {
+          const delta = event.delta as Record<string, unknown> | undefined;
+          if (delta?.type === 'text_delta' && delta.text) {
+            this.emit('stream_delta', instanceId, { text: delta.text as string });
+          } else if (delta?.type === 'thinking_delta' && delta.thinking) {
+            this.emit('stream_delta', instanceId, { thinking: delta.thinking as string });
+          }
+        } else if (eventType === 'content_block_start') {
+          const contentBlock = event.content_block as Record<string, unknown> | undefined;
+          this.emit('stream_delta', instanceId, {
+            type: 'start',
+            blockType: contentBlock?.type as string,
+            blockName: contentBlock?.name as string,
+          });
+        } else if (eventType === 'content_block_stop') {
+          this.emit('stream_delta', instanceId, { type: 'stop' });
         }
-        const inputTokens = result.usage?.input_tokens ?? 0;
-        const outputTokens = result.usage?.output_tokens ?? 0;
+        break;
+      }
+
+      case 'result': {
+        const costUsd = msg.total_cost_usd ?? 0;
+        const inputTokens = msg.usage?.input_tokens ?? 0;
+        const outputTokens = msg.usage?.output_tokens ?? 0;
+
+        instance.totalCostUsd += costUsd;
         instance.totalInputTokens += inputTokens;
         instance.totalOutputTokens += outputTokens;
-        if (result.session_id) {
-          instance.sessionId = result.session_id;
+
+        if (msg.session_id) {
+          instance.sessionId = msg.session_id;
         }
+
         this.emit('result', instanceId, {
-          costUsd: result.total_cost_usd,
-          durationMs: result.duration_ms,
-          stopReason: result.stop_reason,
+          costUsd,
+          durationMs: msg.duration_ms,
+          stopReason: msg.stop_reason,
           inputTokens,
           outputTokens,
           totalInputTokens: instance.totalInputTokens,
           totalOutputTokens: instance.totalOutputTokens,
         });
 
-        // Emit permission denials from result so frontend can show approve UI
-        if (result.permission_denials && result.permission_denials.length > 0) {
-          for (const denial of result.permission_denials) {
-            const inp = denial.tool_input as Record<string, unknown> | null;
+        // Emit any permission denials from the result
+        if (msg.permission_denials && msg.permission_denials.length > 0) {
+          for (const denial of msg.permission_denials) {
             this.emit('permission_request', instanceId, {
               toolName: denial.tool_name,
               toolInput: denial.tool_input,
               toolUseId: denial.tool_use_id,
-              filePath: (inp?.file_path as string) ?? (inp?.command as string) ?? undefined,
+              filePath: (denial.tool_input as Record<string, unknown>)?.file_path as string
+                ?? (denial.tool_input as Record<string, unknown>)?.command as string
+                ?? undefined,
             });
           }
         }
         break;
       }
 
-      case 'stream_event': {
-        const inner = (event as {
-          event?: {
-            type: string;
-            index?: number;
-            delta?: { type: string; text?: string };
-            content_block?: { type: string; id?: string; name?: string };
-          };
-        }).event;
-        if (!inner) break;
-
-        if (inner.type === 'content_block_delta' && inner.delta?.type === 'text_delta' && inner.delta.text) {
-          this.emit('stream_delta', instanceId, { text: inner.delta.text });
-        } else if (inner.type === 'content_block_start') {
-          this.emit('stream_delta', instanceId, {
-            type: 'start',
-            blockType: inner.content_block?.type,
-            blockName: inner.content_block?.name,
-          });
-        } else if (inner.type === 'content_block_stop') {
-          this.emit('stream_delta', instanceId, { type: 'stop' });
-        }
-        break;
-      }
-
       case 'rate_limit_event': {
-        const info = (event as {
-          rate_limit_info?: {
-            status: string;
-            resetsAt?: number;
-            rateLimitType?: string;
-          };
-        }).rate_limit_info;
+        const info = (msg as Record<string, unknown>).rate_limit_info as Record<string, unknown> | undefined;
         if (info) {
           this.emit('rate_limit', instanceId, {
             status: info.status,
@@ -652,10 +754,77 @@ export class StreamProcessManager extends EventEmitter {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Permission / question resolution from frontend
+  // -------------------------------------------------------------------------
+
+  /**
+   * Approve a tool for this instance. Also resolves any pending permission
+   * callback so the conversation continues immediately.
+   */
+  approveTool(instanceId: string, toolName: string): void {
+    const handle = this.handles.get(instanceId);
+    if (!handle) return;
+    handle.approvedTools.add(toolName);
+    console.log(`[stream-process] Approved tool '${toolName}' for instance ${instanceId}`);
+
+    // If there's a pending permission for this tool, resolve it
+    if (handle.pendingPermission && handle.pendingPermission.toolName === toolName) {
+      const pending = handle.pendingPermission;
+      handle.pendingPermission = null;
+      pending.resolve({ behavior: 'allow', updatedInput: pending.toolInput });
+    }
+  }
+
+  /**
+   * Resolve a specific pending permission request (by toolUseId).
+   */
+  resolvePermission(instanceId: string, toolUseId: string, allow: boolean, message?: string): void {
+    const handle = this.handles.get(instanceId);
+    if (!handle?.pendingPermission) return;
+    if (handle.pendingPermission.toolUseId !== toolUseId) return;
+
+    const pending = handle.pendingPermission;
+    handle.pendingPermission = null;
+
+    if (allow) {
+      pending.resolve({ behavior: 'allow', updatedInput: pending.toolInput });
+    } else {
+      pending.resolve({ behavior: 'deny', message: message ?? 'User denied this action' });
+    }
+  }
+
+  /**
+   * Resolve a pending AskUserQuestion — user answered Claude's question.
+   */
+  resolveUserQuestion(instanceId: string, toolUseId: string, answer: string): void {
+    const handle = this.handles.get(instanceId);
+    if (!handle?.pendingUserQuestion) return;
+    if (handle.pendingUserQuestion.toolUseId !== toolUseId) return;
+
+    const pending = handle.pendingUserQuestion;
+    handle.pendingUserQuestion = null;
+
+    // Return allow with the user's answer injected into the input
+    pending.resolve({
+      behavior: 'allow',
+      updatedInput: { answer },
+    });
+  }
+
+  getApprovedTools(instanceId: string): Set<string> {
+    const handle = this.handles.get(instanceId);
+    return handle?.approvedTools ?? new Set();
+  }
+
+  // -------------------------------------------------------------------------
+  // Instance management
+  // -------------------------------------------------------------------------
+
   getAll(): StreamInstance[] {
     return Array.from(this.handles.values()).map(h => ({
       ...h.instance,
-      messages: [], // Don't send full message history in list
+      messages: [],
     }));
   }
 
@@ -664,51 +833,106 @@ export class StreamProcessManager extends EventEmitter {
     return handle ? { ...handle.instance } : undefined;
   }
 
-  /**
-   * Approve a tool for this instance. The tool will be included in --allowedTools
-   * on the next message, so Claude can use it without getting denied.
-   */
-  approveTool(instanceId: string, toolName: string): void {
+  getMessages(instanceId: string): ChatMessage[] {
     const handle = this.handles.get(instanceId);
-    if (!handle) return;
-    handle.approvedTools.add(toolName);
-    console.log(`[stream-process] Approved tool '${toolName}' for instance ${instanceId}. Approved: [${[...handle.approvedTools].join(', ')}]`);
+    return handle ? [...handle.instance.messages] : [];
   }
 
   /**
-   * Get the set of approved tools for building --allowedTools on the next message.
+   * Interrupt the current generation.
    */
-  getApprovedTools(instanceId: string): Set<string> {
+  interrupt(instanceId: string): void {
     const handle = this.handles.get(instanceId);
-    return handle?.approvedTools ?? new Set();
+    if (!handle) throw new Error(`Instance ${instanceId} not found`);
+    if (!handle.conversation) return;
+
+    console.log(`[stream-process] Interrupting instance ${instanceId}`);
+    handle.conversation.interrupt().catch(err => {
+      console.log(`[stream-process] Interrupt error: ${err}`);
+    });
+  }
+
+  /**
+   * Get context window usage breakdown from the SDK.
+   */
+  async getContextUsage(instanceId: string): Promise<unknown> {
+    const handle = this.handles.get(instanceId);
+    if (!handle?.conversation) return null;
+    try {
+      return await handle.conversation.getContextUsage();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get available models from the SDK.
+   */
+  async getSupportedModels(instanceId: string): Promise<unknown[]> {
+    const handle = this.handles.get(instanceId);
+    if (!handle?.conversation) return [];
+    try {
+      return await handle.conversation.supportedModels();
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Rewind files to their state at a specific user message.
+   * Requires enableFileCheckpointing to be true (set in SDK options).
+   */
+  async rewindFiles(instanceId: string, userMessageId: string, dryRun = false): Promise<unknown> {
+    const handle = this.handles.get(instanceId);
+    if (!handle?.conversation) throw new Error('No active conversation');
+    return handle.conversation.rewindFiles(userMessageId, { dryRun });
   }
 
   clearSession(instanceId: string): void {
     const handle = this.handles.get(instanceId);
     if (!handle) return;
+
+    // Close existing conversation if any
+    if (handle.conversation) {
+      handle.conversation.close();
+      handle.conversation = null;
+    }
+    if (handle.inputController) {
+      handle.inputController.end();
+      handle.inputController = null;
+    }
+    handle.abortController = null;
+
     handle.instance.sessionId = null;
     handle.instance.messages = [];
     handle.approvedTools.clear();
+    handle.pendingPermission = null;
+    handle.pendingUserQuestion = null;
     handle.instance.status = INSTANCE_STATUS.WAITING_INPUT;
     this.emit('status', instanceId, INSTANCE_STATUS.WAITING_INPUT);
     console.log(`[stream-process] Session cleared for instance ${instanceId}`);
-  }
-
-  getMessages(instanceId: string): ChatMessage[] {
-    const handle = this.handles.get(instanceId);
-    return handle ? [...handle.instance.messages] : [];
   }
 
   async kill(instanceId: string): Promise<void> {
     const handle = this.handles.get(instanceId);
     if (!handle) throw new Error(`Instance ${instanceId} not found`);
 
-    if (handle.currentProcess) {
-      handle.currentProcess.kill('SIGTERM');
-      // Force kill after 3s
-      setTimeout(() => {
-        try { handle.currentProcess?.kill('SIGKILL'); } catch { /* already dead */ }
-      }, 3000);
+    // Close the SDK conversation
+    if (handle.conversation) {
+      handle.conversation.close();
+    }
+    if (handle.inputController) {
+      handle.inputController.end();
+    }
+
+    // Reject any pending permission/question
+    if (handle.pendingPermission) {
+      handle.pendingPermission.resolve({ behavior: 'deny', message: 'Instance killed' });
+      handle.pendingPermission = null;
+    }
+    if (handle.pendingUserQuestion) {
+      handle.pendingUserQuestion.resolve({ behavior: 'deny', message: 'Instance killed' });
+      handle.pendingUserQuestion = null;
     }
 
     handle.instance.status = INSTANCE_STATUS.EXITED;
@@ -720,6 +944,87 @@ export class StreamProcessManager extends EventEmitter {
   async killAll(): Promise<void> {
     const ids = Array.from(this.handles.keys());
     await Promise.all(ids.map(id => this.kill(id)));
+  }
+
+  /**
+   * Wait for the current conversation turn to finish (if any).
+   * Resolves immediately if idle.
+   */
+  waitForIdle(instanceId: string, timeoutMs = 30000): Promise<void> {
+    const handle = this.handles.get(instanceId);
+    if (!handle) return Promise.reject(new Error(`Instance ${instanceId} not found`));
+    if (!handle.conversation) return Promise.resolve();
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.removeListener('status', onStatus);
+        reject(new Error('Timed out waiting for idle'));
+      }, timeoutMs);
+
+      const onStatus = (id: string, status: string) => {
+        if (id === instanceId && status === INSTANCE_STATUS.WAITING_INPUT) {
+          clearTimeout(timer);
+          this.removeListener('status', onStatus);
+          resolve();
+        }
+      };
+      this.on('status', onStatus);
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Helpers
+  // -------------------------------------------------------------------------
+
+  /** Extract concatenated text from content blocks for dedup comparison */
+  private extractText(blocks: ContentBlock[]): string {
+    return blocks
+      .filter(b => b.type === 'text' && b.text)
+      .map(b => b.text!)
+      .join('');
+  }
+
+  private mapPermissionMode(mode: string): 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' {
+    switch (mode) {
+      case 'plan': return 'plan';
+      case 'ask': return 'default';
+      case 'default': return 'default';
+      case 'auto-edit': return 'acceptEdits';
+      case 'acceptEdits': return 'acceptEdits';
+      case 'full-access': return 'bypassPermissions';
+      case 'bypassPermissions': return 'bypassPermissions';
+      default: return 'default';
+    }
+  }
+
+  private mapEffort(effort: string | null | undefined): 'low' | 'medium' | 'high' | undefined {
+    switch (effort) {
+      case 'light': return 'low';
+      case 'low': return 'low';
+      case 'medium': return 'medium';
+      case 'extended': return 'high';
+      case 'high': return 'high';
+      default: return undefined;
+    }
+  }
+
+  private mapContentBlock(block: BetaContentBlock): ContentBlock {
+    if (block.type === 'text') {
+      return { type: 'text', text: block.text };
+    }
+    if (block.type === 'tool_use') {
+      return {
+        type: 'tool_use',
+        tool_use_id: block.id,
+        name: block.name,
+        input: block.input,
+      };
+    }
+    if (block.type === 'thinking') {
+      return { type: 'thinking', thinking: block.thinking };
+    }
+    // Fallback for other block types
+    return { type: 'text', text: '' };
   }
 }
 

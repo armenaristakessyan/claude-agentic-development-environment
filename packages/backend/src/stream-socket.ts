@@ -13,9 +13,16 @@ export function setupStreamSocketHandlers(
 ): void {
   // Forward real-time text streaming deltas — scoped to instance room
   streamProcess.on('stream_delta', (instanceId: string, data: {
-    text?: string; type?: string; blockType?: string; blockName?: string;
+    text?: string; thinking?: string; type?: string; blockType?: string; blockName?: string;
   }) => {
     io.to(instanceRoom(instanceId)).emit('chat:stream_delta', { instanceId, ...data });
+  });
+
+  // Forward tool progress events — scoped to instance room
+  streamProcess.on('tool_progress', (instanceId: string, data: {
+    toolUseId: string; toolName: string; elapsedSeconds: number; taskId?: string;
+  }) => {
+    io.to(instanceRoom(instanceId)).emit('chat:tool_progress', { instanceId, ...data });
   });
 
   // Forward rate limit events — scoped to instance room
@@ -123,9 +130,23 @@ export function setupStreamSocketHandlers(
       socket.leave(instanceRoom(instanceId));
     });
 
-    // Client approves a tool for an instance (granular permission)
+    // Client approves a tool for an instance (always-allow for this tool)
     socket.on('chat:approve_tool', ({ instanceId, toolName }: { instanceId: string; toolName: string }) => {
       streamProcess.approveTool(instanceId, toolName);
+    });
+
+    // Client resolves a specific permission request (allow/deny this one call)
+    socket.on('chat:resolve_permission', ({ instanceId, toolUseId, allow, message }: {
+      instanceId: string; toolUseId: string; allow: boolean; message?: string;
+    }) => {
+      streamProcess.resolvePermission(instanceId, toolUseId, allow, message);
+    });
+
+    // Client answers an AskUserQuestion from Claude
+    socket.on('chat:resolve_question', ({ instanceId, toolUseId, answer }: {
+      instanceId: string; toolUseId: string; answer: string;
+    }) => {
+      streamProcess.resolveUserQuestion(instanceId, toolUseId, answer);
     });
 
     // Client sends a chat message

@@ -1,4 +1,4 @@
-import { RefreshCw, FolderPlus, FolderOpen, GitBranch, FileDiff, Store } from 'lucide-react';
+import { RefreshCw, FolderPlus, FolderOpen, GitBranch, FileDiff, Store, Shield, ChevronDown, ChevronRight, Loader } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import ProjectList from './ProjectList';
 import MarketplacePanel from './MarketplacePanel';
@@ -15,6 +15,7 @@ interface SidebarProps {
   projectsRefreshing: boolean;
   instances: Instance[];
   scanPaths: string[];
+  selectedInstanceId?: string | null;
   onRefreshProjects: () => void;
   onLaunchProject: (projectPath: string, taskDescription?: string) => void;
   onDeleteWorktree: (projectPath: string, worktreePath: string) => void;
@@ -41,12 +42,14 @@ export default function Sidebar({
   onDeleteWorktree,
   onOpenScanPaths,
   onOpenTaskChanges,
+  selectedInstanceId,
   width,
   collapsed,
   onExpand,
 }: SidebarProps) {
   const [selectedRoot, setSelectedRoot] = useState<string | null>(scanPaths[0] ?? null);
   const [tab, setTab] = useState<'files' | 'changes' | 'marketplace'>('files');
+  const [showPermissions, setShowPermissions] = useState(false);
 
   // Collapsed: thin icon strip
   if (collapsed) {
@@ -72,6 +75,14 @@ export default function Sidebar({
           title="Marketplace"
         >
           <Store className="h-4 w-4" />
+        </button>
+        <div className="flex-1" />
+        <button
+          onClick={() => { onExpand(); setShowPermissions(true); }}
+          className="rounded p-2 text-neutral-600 transition-colors hover:bg-neutral-800/30 hover:text-neutral-400"
+          title="Permissions"
+        >
+          <Shield className="h-4 w-4" />
         </button>
       </aside>
     );
@@ -169,7 +180,143 @@ export default function Sidebar({
       ) : (
         <MarketplacePanel />
       )}
+
+      {/* Permissions panel (slides up from bottom) */}
+      {showPermissions && (
+        <PermissionsPanel
+          instanceId={selectedInstanceId}
+          onClose={() => setShowPermissions(false)}
+        />
+      )}
+
+      {/* Settings button at bottom */}
+      {!showPermissions && (
+        <div className="shrink-0 border-t border-[#1e1e1e] px-3 py-2">
+          <button
+            onClick={() => setShowPermissions(true)}
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-neutral-600 transition-colors hover:bg-[#1a1a1a] hover:text-neutral-400"
+          >
+            <Shield className="h-3.5 w-3.5" />
+            <span>Permissions</span>
+          </button>
+        </div>
+      )}
     </aside>
+  );
+}
+
+// --- Permissions Panel ---
+
+interface PermissionsByScope {
+  session: string[];
+  project: string[];
+  projectShared: string[];
+  user: string[];
+  global: string[];
+}
+
+const SCOPE_META = [
+  { key: 'session', label: 'Session', description: 'Current session only', color: 'text-blue-300', bgColor: 'bg-blue-400/10' },
+  { key: 'project', label: 'Project (local)', description: '.claude/settings.local.json', color: 'text-emerald-300', bgColor: 'bg-green-400/10' },
+  { key: 'projectShared', label: 'Project (shared)', description: '.claude/settings.json', color: 'text-amber-300', bgColor: 'bg-amber-400/10' },
+  { key: 'user', label: 'User', description: '~/.claude/settings.local.json', color: 'text-violet-300', bgColor: 'bg-purple-400/10' },
+  { key: 'global', label: 'Global', description: '~/.claude/settings.json', color: 'text-orange-300/80', bgColor: 'bg-orange-400/10' },
+] as const;
+
+function PermissionsPanel({ instanceId, onClose }: { instanceId?: string | null; onClose: () => void }) {
+  const [permissions, setPermissions] = useState<PermissionsByScope | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [expandedScopes, setExpandedScopes] = useState<Set<string>>(new Set(['session', 'project']));
+
+  useEffect(() => {
+    if (!instanceId) {
+      setPermissions(null);
+      return;
+    }
+    setLoading(true);
+    fetch(`/api/instances/${instanceId}/permissions`)
+      .then(res => res.ok ? res.json() as Promise<PermissionsByScope> : null)
+      .then(data => { setPermissions(data); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, [instanceId]);
+
+  const toggleScope = (key: string) => {
+    setExpandedScopes(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const totalPermissions = permissions
+    ? Object.values(permissions).reduce((sum, arr) => sum + arr.length, 0)
+    : 0;
+
+  return (
+    <div className="shrink-0 border-t border-[#1e1e1e]">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2">
+        <Shield className="h-3.5 w-3.5 text-neutral-500" />
+        <span className="text-[12px] font-medium text-neutral-400">Permissions</span>
+        <span className="text-[10px] text-neutral-600">{totalPermissions} rule{totalPermissions !== 1 ? 's' : ''}</span>
+        <div className="flex-1" />
+        <button
+          onClick={onClose}
+          className="text-[11px] text-neutral-600 hover:text-neutral-400"
+        >
+          Hide
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="max-h-[300px] overflow-y-auto px-2 pb-2">
+        {!instanceId ? (
+          <p className="px-2 py-3 text-[11px] text-neutral-700">Select a task to view permissions</p>
+        ) : loading ? (
+          <div className="flex items-center justify-center py-4">
+            <Loader className="h-3.5 w-3.5 animate-spin text-neutral-600" />
+          </div>
+        ) : !permissions ? (
+          <p className="px-2 py-3 text-[11px] text-neutral-700">Failed to load permissions</p>
+        ) : (
+          SCOPE_META.map(scope => {
+            const rules = permissions[scope.key as keyof PermissionsByScope];
+            const isExpanded = expandedScopes.has(scope.key);
+            return (
+              <div key={scope.key} className="mb-1">
+                <button
+                  onClick={() => toggleScope(scope.key)}
+                  className="flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[#1a1a1a]"
+                >
+                  {isExpanded
+                    ? <ChevronDown className="h-3 w-3 shrink-0 text-neutral-600" />
+                    : <ChevronRight className="h-3 w-3 shrink-0 text-neutral-600" />
+                  }
+                  <span className={`text-[11px] font-medium ${scope.color}`}>{scope.label}</span>
+                  <span className="text-[10px] text-neutral-700">{rules.length}</span>
+                </button>
+                {isExpanded && rules.length > 0 && (
+                  <div className="ml-5 space-y-0.5 pb-1">
+                    {rules.map((rule, i) => (
+                      <div
+                        key={i}
+                        className={`rounded px-2 py-1 text-[11px] font-mono ${scope.bgColor} ${scope.color}`}
+                      >
+                        {rule}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {isExpanded && rules.length === 0 && (
+                  <p className="ml-5 pb-1 text-[10px] text-neutral-700">No permissions</p>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
   );
 }
 

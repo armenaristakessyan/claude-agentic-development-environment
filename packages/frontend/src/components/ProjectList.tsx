@@ -506,25 +506,6 @@ function WorktreeRow({
       </span>
 
       <div className="flex shrink-0 items-center gap-0.5">
-        <button
-          onClick={e => { e.stopPropagation(); onDelete(); }}
-          className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
-          title="Delete worktree"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
-        <button
-          onClick={onLaunch}
-          disabled={isLaunching}
-          className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-neutral-300 group-hover:opacity-100 disabled:opacity-50"
-          title="Launch in worktree"
-        >
-          {isLaunching ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Play className="h-3.5 w-3.5" />
-          )}
-        </button>
       </div>
     </div>
   );

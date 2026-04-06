@@ -22,6 +22,7 @@ export default function MarketplacePanel() {
     marketplaceNames,
     installPlugin,
     uninstallPlugin,
+    installingPlugins,
     refreshMarketplace,
   } = useMarketplace();
 
@@ -129,6 +130,7 @@ export default function MarketplacePanel() {
                 <PluginCard
                   key={`${plugin.marketplace}/${plugin.name}`}
                   plugin={plugin}
+                  isLoading={installingPlugins.has(`${plugin.marketplace}/${plugin.name}`)}
                   onClick={() => setSelectedPlugin(plugin)}
                   onInstall={() => installPlugin(plugin.marketplace, plugin.name)}
                   onUninstall={() => uninstallPlugin(plugin.marketplace, plugin.name)}

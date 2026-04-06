@@ -189,7 +189,7 @@ export default function TaskSidebar({
                           setConfirmKillId(instance.id);
                           setDeleteWorktreeChecked(false);
                         }}
-                        className="mt-0.5 shrink-0 rounded p-1 text-neutral-700 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
+                        className="mt-0.5 shrink-0 rounded p-1 text-neutral-700 opacity-0 transition-all hover:text-rose-300 group-hover:opacity-100"
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
@@ -201,8 +201,8 @@ export default function TaskSidebar({
                     <div className="mt-1.5 flex flex-col gap-1 border-l border-blue-500/20 pl-2.5 ml-0.5">
                       {agents.map(agent => (
                         <div key={agent.taskId} className="flex items-center gap-1.5 text-[10px]">
-                          <Loader className="h-2.5 w-2.5 shrink-0 animate-spin text-blue-400/70" />
-                          <span className="truncate text-blue-400/60">
+                          <Loader className="h-2.5 w-2.5 shrink-0 animate-spin text-blue-300/60" />
+                          <span className="truncate text-blue-300/50">
                             {agent.description}
                           </span>
                           {agent.lastToolName && (
@@ -272,7 +272,7 @@ export default function TaskSidebar({
                       {canResume && (
                         <button
                           onClick={() => onResumeTask(task.id)}
-                          className="rounded p-1 text-neutral-600 hover:text-green-400"
+                          className="rounded p-1 text-neutral-600 hover:text-emerald-300"
                           title="Resume in worktree"
                         >
                           <Play className="h-3 w-3" />
@@ -280,7 +280,7 @@ export default function TaskSidebar({
                       )}
                       <button
                         onClick={() => onRemoveTask(task.id)}
-                        className="rounded p-1 text-neutral-600 hover:text-red-400"
+                        className="rounded p-1 text-neutral-600 hover:text-rose-300"
                         title="Remove from history"
                       >
                         <X className="h-3 w-3" />
