@@ -15,12 +15,15 @@ import { useInstances } from './hooks/useInstances';
 import { useConfig } from './hooks/useConfig';
 import { useAttentionQueue } from './hooks/useAttentionQueue';
 import { useTaskHistory } from './hooks/useTaskHistory';
+import { useRtk } from './hooks/useRtk';
+import RtkStatusIndicator from './components/RtkStatusIndicator';
 
 export default function App() {
   const { config, updateConfig } = useConfig();
   const { projects, loading: projectsLoading, refreshing: projectsRefreshing, refreshProjects, deleteWorktree } = useProjects();
   const { instances, spawnInstance, killInstance, refetch: refetchInstances } = useInstances();
   const { tasks: historyTasks, fetchTasks, removeTask, resumeTask } = useTaskHistory();
+  const { status: rtkStatus, stats: rtkStats, loading: rtkLoading, installing: rtkInstalling, installHooks, uninstallHooks, dismissed: rtkDismissed, dismiss: dismissRtk } = useRtk();
   const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const typingLocked = !!(selectedInstanceId && (drafts[selectedInstanceId] ?? '').length > 0);
@@ -289,6 +292,16 @@ export default function App() {
 
         {/* Right: rate limit + queue count + sidebar toggles */}
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          <RtkStatusIndicator
+            status={rtkStatus}
+            stats={rtkStats}
+            loading={rtkLoading}
+            installing={rtkInstalling}
+            dismissed={rtkDismissed}
+            onInstall={installHooks}
+            onUninstall={uninstallHooks}
+            onDismiss={dismissRtk}
+          />
           {rateLimitInfo && (
             <span className="flex items-center gap-1.5 rounded-md bg-amber-950/30 px-2 py-0.5 text-[11px] text-amber-400/80">
               <AlertTriangle className="h-3 w-3" />

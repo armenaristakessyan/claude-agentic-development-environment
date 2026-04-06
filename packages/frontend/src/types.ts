@@ -127,3 +127,19 @@ export interface ScopeContract {
   allowedCommands?: string[];
   forbiddenPatterns?: string[];
 }
+
+// --- RTK ---
+
+export interface RtkStatus {
+  installed: boolean;
+  version: string | null;
+  hooksInstalled: boolean;
+  hookDetails: string;
+}
+
+export interface RtkStats {
+  totalTokensSaved: number;
+  totalTokensOriginal: number;
+  savingsPercent: number;
+  commandCount: number;
+}
