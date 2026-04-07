@@ -61,23 +61,23 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
       onClick={onClose}
     >
       <div
-        className="mx-4 w-full max-w-lg overflow-hidden rounded-xl border border-[#1e1e1e] bg-[#111111] shadow-2xl"
+        className="mx-4 w-full max-w-lg overflow-hidden rounded-xl border border-border-default bg-modal shadow-2xl"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-[#1e1e1e] px-5 py-4">
+        <div className="flex items-center justify-between border-b border-border-default px-5 py-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-500/10">
               <Plus className="h-4 w-4 text-gray-400" />
             </div>
             <div>
-              <span className="block text-[14px] font-medium text-neutral-200">New Task</span>
-              <span className="block text-[12px] text-neutral-600">{project.name}</span>
+              <span className="block text-[14px] font-medium text-primary">New Task</span>
+              <span className="block text-[12px] text-faint">{project.name}</span>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-neutral-600 transition-colors hover:bg-[#1e1e1e] hover:text-neutral-400"
+            className="rounded-lg p-1.5 text-faint transition-colors hover:bg-elevated hover:text-tertiary"
           >
             <X className="h-4 w-4" />
           </button>
@@ -86,18 +86,18 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
         {/* Body */}
         <div className="px-5 py-4">
           {/* Project info badge */}
-          <div className="mb-4 flex items-center gap-2 rounded-lg bg-[#0d0d0d] px-3 py-2 text-[12px] text-neutral-500">
+          <div className="mb-4 flex items-center gap-2 rounded-lg bg-root px-3 py-2 text-[12px] text-muted">
             {isGit ? (
               <>
-                <GitBranch className="h-3 w-3 text-neutral-600" />
+                <GitBranch className="h-3 w-3 text-faint" />
                 <span>{project.gitBranch}</span>
-                <span className="text-neutral-700">--</span>
-                <span className="text-neutral-600">worktree + branch will be created</span>
+                <span className="text-faint">--</span>
+                <span className="text-faint">worktree + branch will be created</span>
               </>
             ) : (
               <>
-                <Folder className="h-3 w-3 text-neutral-600" />
-                <span className="text-neutral-600">Not a git project -- will launch directly</span>
+                <Folder className="h-3 w-3 text-faint" />
+                <span className="text-faint">Not a git project -- will launch directly</span>
               </>
             )}
           </div>
@@ -110,13 +110,13 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
             onKeyDown={handleKeyDown}
             placeholder="What would you like to work on?"
             rows={3}
-            className="w-full resize-none rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-2.5 text-[14px] text-neutral-300 placeholder-neutral-600 outline-none transition-colors focus:border-[#333]"
+            className="w-full resize-none rounded-lg border border-border-input bg-root px-3 py-2.5 text-[14px] text-secondary placeholder-placeholder outline-none transition-colors focus:border-border-focus"
           />
 
           {/* Branch name — only for git projects with a task description */}
           {isGit && taskDescription.trim() && (
             <div className="mt-3">
-              <label className="mb-1 flex items-center gap-1.5 text-[11px] text-neutral-600">
+              <label className="mb-1 flex items-center gap-1.5 text-[11px] text-faint">
                 <GitBranch className="h-3 w-3" />
                 Branch name
               </label>
@@ -126,21 +126,21 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
                 onChange={e => { setBranchName(e.target.value); setBranchTouched(true); }}
                 onKeyDown={handleKeyDown}
                 placeholder="claude/my-feature"
-                className="w-full rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-2 font-mono text-[13px] text-neutral-400 placeholder-neutral-700 outline-none transition-colors focus:border-[#333]"
+                className="w-full rounded-lg border border-border-input bg-root px-3 py-2 font-mono text-[13px] text-tertiary placeholder-placeholder outline-none transition-colors focus:border-border-focus"
               />
             </div>
           )}
 
-          <p className="mt-2 text-[11px] text-neutral-700">
+          <p className="mt-2 text-[11px] text-faint">
             Enter to launch -- Shift+Enter for new line -- Esc to cancel
           </p>
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-[#1e1e1e] px-5 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-border-default px-5 py-3">
           <button
             onClick={onClose}
-            className="rounded-lg px-4 py-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-300"
+            className="rounded-lg px-4 py-2 text-[13px] text-muted transition-colors hover:text-secondary"
           >
             Cancel
           </button>

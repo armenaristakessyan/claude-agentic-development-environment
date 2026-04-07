@@ -272,7 +272,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
     if (s === 'A' || s === '??') return 'text-emerald-300';
     if (s === 'D') return 'text-rose-300';
     if (s === 'R') return 'text-blue-300';
-    return 'text-neutral-500';
+    return 'text-muted';
   };
 
   const statusIcon = (s: string) => {
@@ -290,7 +290,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
   const hasUnpushed = (gitStatus?.unpushedCount ?? 0) > 0;
 
   return (
-    <div className="flex h-full shrink-0 flex-col overflow-hidden rounded-xl bg-[#161616]" style={{ width }}>
+    <div className="flex h-full shrink-0 flex-col overflow-hidden rounded-xl bg-surface" style={{ width }}>
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3">
         <span className="rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 py-0.5 text-[12px] font-semibold text-blue-300">
@@ -298,20 +298,20 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
         </span>
         <button
           onClick={onClose}
-          className="ml-0.5 rounded p-0.5 text-neutral-500 transition-colors hover:text-neutral-300"
+          className="ml-0.5 rounded p-0.5 text-muted transition-colors hover:text-secondary"
         >
           <X className="h-3.5 w-3.5" />
         </button>
         <div className="flex-1" />
         {gitStatus && (
-          <span className="flex items-center gap-1 text-[11px] text-neutral-500">
+          <span className="flex items-center gap-1 text-[11px] text-muted">
             <GitBranch className="h-3 w-3" />
             {gitStatus.branch}
           </span>
         )}
         <button
           onClick={() => { fetchChanges(); fetchGitStatus(); }}
-          className="rounded p-1 text-neutral-600 transition-colors hover:text-neutral-400"
+          className="rounded p-1 text-faint transition-colors hover:text-tertiary"
           title="Refresh"
         >
           <RefreshCw className={`h-3 w-3 ${loading ? 'animate-spin' : ''}`} />
@@ -319,8 +319,8 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
       </div>
 
       {/* Summary toolbar */}
-      <div className="flex items-center gap-3 border-b border-[#1e1e1e] px-4 pb-2">
-        <span className="text-[11px] text-neutral-500">
+      <div className="flex items-center gap-3 border-b border-border-default px-4 pb-2">
+        <span className="text-[11px] text-muted">
           {changes.length} file{changes.length !== 1 ? 's' : ''}
         </span>
         {totalAdded > 0 && <span className="text-[10px] text-emerald-300">+{totalAdded}</span>}
@@ -344,15 +344,15 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
       <div className="flex-1 overflow-y-auto">
         {loading && changes.length === 0 ? (
           <div className="flex items-center justify-center py-8">
-            <Loader className="h-4 w-4 animate-spin text-neutral-600" />
+            <Loader className="h-4 w-4 animate-spin text-faint" />
           </div>
         ) : changes.length === 0 && !hasCommits ? (
-          <p className="py-8 text-center text-[12px] text-neutral-700">No changes</p>
+          <p className="py-8 text-center text-[12px] text-faint">No changes</p>
         ) : (
           <>
             {/* Select all header */}
             {changes.length > 0 && (
-              <div className="flex items-center gap-2 border-b border-[#1a1a1a] px-4 py-1.5">
+              <div className="flex items-center gap-2 border-b border-border-subtle px-4 py-1.5">
                 <button
                   onClick={toggleAllFiles}
                   className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
@@ -360,12 +360,12 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
                       ? 'border-blue-500 bg-blue-500/70'
                       : selectedFiles.size > 0
                         ? 'border-blue-500/50 bg-blue-500/20'
-                        : 'border-neutral-600'
+                        : 'border-border-input'
                   }`}
                 >
                   {selectedFiles.size === changes.length && <Check className="h-2.5 w-2.5 text-white" />}
                 </button>
-                <span className="text-[11px] text-neutral-500">
+                <span className="text-[11px] text-muted">
                   {selectedFiles.size === changes.length ? 'Deselect all' : 'Select all'}
                 </span>
               </div>
@@ -378,20 +378,20 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
               const isSelected = selectedFiles.has(file.path);
 
               return (
-                <div key={file.path} className="border-b border-[#1a1a1a]">
+                <div key={file.path} className="border-b border-border-subtle">
                   {/* File header */}
                   <div className="flex items-center gap-2 px-4 py-1.5">
                     <button
                       onClick={() => toggleFileSelection(file.path)}
                       className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
-                        isSelected ? 'border-blue-500 bg-blue-500/70' : 'border-neutral-600'
+                        isSelected ? 'border-blue-500 bg-blue-500/70' : 'border-border-input'
                       }`}
                     >
                       {isSelected && <Check className="h-2.5 w-2.5 text-white" />}
                     </button>
                     <button
                       onClick={() => toggleExpanded(file.path)}
-                      className="shrink-0 text-neutral-600 hover:text-neutral-400"
+                      className="shrink-0 text-faint hover:text-tertiary"
                     >
                       {isExpanded
                         ? <ChevronDown className="h-3.5 w-3.5" />
@@ -401,7 +401,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
                     <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${statusDotColor(file.status)}`} />
                     <button
                       onClick={() => toggleExpanded(file.path)}
-                      className="min-w-0 flex-1 truncate text-left text-[12px] text-neutral-300 hover:text-white"
+                      className="min-w-0 flex-1 truncate text-left text-[12px] text-secondary hover:text-white"
                     >
                       {file.path}
                     </button>
@@ -419,7 +419,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
                     ) : (
                       <button
                         onClick={() => setRevertConfirm(file.path)}
-                        className="shrink-0 rounded p-0.5 text-neutral-700 transition-colors hover:text-rose-300"
+                        className="shrink-0 rounded p-0.5 text-faint transition-colors hover:text-rose-300"
                         title="Revert file"
                       >
                         <Undo2 className="h-3 w-3" />
@@ -429,10 +429,10 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
 
                   {/* Expanded diff */}
                   {isExpanded && (
-                    <div className="overflow-x-auto bg-[#0d0d0d]">
+                    <div className="overflow-x-auto bg-root">
                       {isDiffLoading ? (
                         <div className="flex items-center justify-center py-6">
-                          <Loader className="h-3.5 w-3.5 animate-spin text-neutral-600" />
+                          <Loader className="h-3.5 w-3.5 animate-spin text-faint" />
                         </div>
                       ) : diff ? (
                         <DiffView diff={diff} />
@@ -446,9 +446,9 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
             {/* Commit messages (when no uncommitted changes but commits exist) */}
             {changes.length === 0 && hasCommits && gitStatus && (
               <div className="px-4 py-3">
-                <p className="mb-2 text-[11px] font-medium text-neutral-500">Commits on {gitStatus.branch}:</p>
+                <p className="mb-2 text-[11px] font-medium text-muted">Commits on {gitStatus.branch}:</p>
                 {gitStatus.commitMessages.map((msg, i) => (
-                  <p key={i} className="text-[12px] text-neutral-400">• {msg}</p>
+                  <p key={i} className="text-[12px] text-tertiary">• {msg}</p>
                 ))}
               </div>
             )}
@@ -457,7 +457,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
       </div>
 
       {/* --- Bottom workflow panel --- */}
-      <div className="shrink-0 border-t border-[#1e1e1e]">
+      <div className="shrink-0 border-t border-border-default">
         {/* Success states */}
         {prUrl && (
           <div className="flex items-center gap-2 bg-emerald-950/15 px-4 py-3">
@@ -485,7 +485,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
             {isWorktree && (
               cleanupConfirm ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] text-neutral-400">Delete worktree and branch?</span>
+                  <span className="text-[11px] text-tertiary">Delete worktree and branch?</span>
                   <button
                     onClick={handleCleanup}
                     className="rounded bg-rose-500/15 px-2 py-0.5 text-[11px] text-rose-300 hover:bg-rose-500/20"
@@ -494,7 +494,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
                   </button>
                   <button
                     onClick={() => setCleanupConfirm(false)}
-                    className="text-[11px] text-neutral-500 hover:text-neutral-300"
+                    className="text-[11px] text-muted hover:text-secondary"
                   >
                     Keep
                   </button>
@@ -502,7 +502,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
               ) : (
                 <button
                   onClick={() => setCleanupConfirm(true)}
-                  className="flex items-center gap-1.5 text-[11px] text-neutral-500 hover:text-neutral-300"
+                  className="flex items-center gap-1.5 text-[11px] text-muted hover:text-secondary"
                 >
                   <Trash2 className="h-3 w-3" />
                   Clean up worktree
@@ -514,20 +514,20 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
 
         {/* PR form */}
         {showPrForm && !prUrl && (
-          <div className="space-y-2 border-b border-[#1e1e1e] px-4 py-3">
+          <div className="space-y-2 border-b border-border-default px-4 py-3">
             <input
               type="text"
               value={prTitle}
               onChange={e => setPrTitle(e.target.value)}
               placeholder="PR title..."
-              className="w-full rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-1.5 text-[12px] text-neutral-300 placeholder-neutral-600 outline-none"
+              className="w-full rounded-lg border border-border-input bg-root px-3 py-1.5 text-[12px] text-secondary placeholder-placeholder outline-none"
             />
             <textarea
               value={prBody}
               onChange={e => setPrBody(e.target.value)}
               placeholder="Description (optional)..."
               rows={3}
-              className="w-full resize-none rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-1.5 text-[12px] text-neutral-300 placeholder-neutral-600 outline-none"
+              className="w-full resize-none rounded-lg border border-border-input bg-root px-3 py-1.5 text-[12px] text-secondary placeholder-placeholder outline-none"
             />
             <div className="flex items-center gap-2">
               <button
@@ -540,7 +540,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
               </button>
               <button
                 onClick={() => setShowPrForm(false)}
-                className="text-[12px] text-neutral-500 hover:text-neutral-300"
+                className="text-[12px] text-muted hover:text-secondary"
               >
                 Cancel
               </button>
@@ -556,7 +556,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
               onChange={e => setCommitMessage(e.target.value)}
               placeholder={instance?.taskDescription ? `${instance.taskDescription}` : 'Commit message...'}
               rows={2}
-              className="w-full resize-none rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-1.5 text-[12px] text-neutral-300 placeholder-neutral-600 outline-none"
+              className="w-full resize-none rounded-lg border border-border-input bg-root px-3 py-1.5 text-[12px] text-secondary placeholder-placeholder outline-none"
               onKeyDown={e => {
                 if (e.key === 'Enter' && e.metaKey) { e.preventDefault(); handleCommit(); }
               }}
@@ -613,7 +613,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
         {/* Instance info footer */}
         {instance && !hasUncommitted && !hasCommits && !mergeResult && !prUrl && (
           <div className="flex items-center gap-2 px-4 py-2">
-            <span className="truncate text-[11px] text-neutral-600">
+            <span className="truncate text-[11px] text-faint">
               {instance.taskDescription ?? instance.projectName}
             </span>
           </div>
@@ -627,7 +627,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
 
 function DiffView({ diff }: { diff: string }) {
   if (!diff || diff === '(no diff available)' || diff === '(failed to load diff)') {
-    return <p className="px-4 py-3 text-[11px] text-neutral-600">{diff || 'No diff'}</p>;
+    return <p className="px-4 py-3 text-[11px] text-faint">{diff || 'No diff'}</p>;
   }
 
   const rawLines = diff.split('\n');
@@ -672,7 +672,7 @@ function DiffView({ diff }: { diff: string }) {
             const rest = match?.[5]?.trim();
             return (
               <tr key={i}>
-                <td colSpan={4} className="border-y border-dashed border-[#1e1e1e] px-4 py-1 text-center text-[10px] text-neutral-600">
+                <td colSpan={4} className="border-y border-dashed border-border-default px-4 py-1 text-center text-[10px] text-faint">
                   {rest || p.line}
                 </td>
               </tr>
@@ -682,19 +682,19 @@ function DiffView({ diff }: { diff: string }) {
           const bgClass = p.type === 'removed' ? 'bg-rose-950/10'
             : p.type === 'added' ? 'bg-emerald-950/10'
             : '';
-          const numColor = p.type === 'context' ? 'text-neutral-700' : 'text-neutral-600';
+          const numColor = p.type === 'context' ? 'text-faint' : 'text-faint';
           const textColor = p.type === 'removed' ? 'text-rose-300/80'
             : p.type === 'added' ? 'text-emerald-300/90'
-            : 'text-neutral-500';
+            : 'text-muted';
           const sign = p.type === 'removed' ? '-' : p.type === 'added' ? '+' : ' ';
           const signColor = p.type === 'removed' ? 'text-rose-300/70' : p.type === 'added' ? 'text-emerald-400/60' : 'text-transparent';
 
           return (
             <tr key={i} className={bgClass}>
-              <td className={`w-8 select-none border-r border-[#1a1a1a] px-1.5 text-right ${numColor}`}>
+              <td className={`w-8 select-none border-r border-border-subtle px-1.5 text-right ${numColor}`}>
                 {p.oldNum ?? ''}
               </td>
-              <td className={`w-8 select-none border-r border-[#1a1a1a] px-1.5 text-right ${numColor}`}>
+              <td className={`w-8 select-none border-r border-border-subtle px-1.5 text-right ${numColor}`}>
                 {p.newNum ?? ''}
               </td>
               <td className={`w-4 select-none px-0.5 text-center ${signColor}`}>{sign}</td>

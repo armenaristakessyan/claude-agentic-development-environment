@@ -6,6 +6,8 @@ interface AppConfig {
   scanDepth: number;
   port: number;
   maxInstances: number;
+  theme: 'dark' | 'light';
+  zoom: 100 | 110 | 125 | 150;
 }
 
 export function useConfig() {

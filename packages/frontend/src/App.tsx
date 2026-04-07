@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { MessageSquare, GitBranch, PanelLeft, PanelRight, Loader, CheckCircle2, Circle, AlertCircle, Pause, Search, AlertTriangle } from 'lucide-react';
+import { MessageSquare, GitBranch, PanelLeft, PanelRight, Loader, CheckCircle2, Circle, AlertCircle, Pause, Search, AlertTriangle, Settings } from 'lucide-react';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useSocket } from './hooks/useSocket';
 import type { InstanceStatus, AgentTask } from './types';
@@ -17,8 +17,11 @@ import { useAttentionQueue } from './hooks/useAttentionQueue';
 import { useTaskHistory } from './hooks/useTaskHistory';
 import { useRtk } from './hooks/useRtk';
 import RtkStatusIndicator from './components/RtkStatusIndicator';
+import SettingsModal from './components/SettingsModal';
+import { useTheme } from './contexts/ThemeContext';
 
 export default function App() {
+  const { theme } = useTheme();
   const { config, updateConfig } = useConfig();
   const { projects, loading: projectsLoading, refreshing: projectsRefreshing, refreshProjects, deleteWorktree } = useProjects();
   const { instances, spawnInstance, killInstance, refetch: refetchInstances } = useInstances();
@@ -29,6 +32,7 @@ export default function App() {
   const typingLocked = !!(selectedInstanceId && (drafts[selectedInstanceId] ?? '').length > 0);
   const [scanPathsOpen, setScanPathsOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const autoOpenedRef = useRef(false);
   const socket = useSocket();
 
@@ -274,19 +278,19 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen flex-col bg-[#0d0d0d]">
+    <div className="flex h-screen flex-col bg-root">
       {/* Topbar — full width, same bg as root */}
       <div className="flex h-10 shrink-0 items-center px-4">
         {/* Left: logo + project + branch */}
         <div className="flex shrink-0 items-center gap-3">
-          <img src="/favicon.png" alt="Logo" className="h-4 w-4 invert opacity-60" />
-          <span className="text-[13px] font-medium text-neutral-300">
+          <img src="/favicon.png" alt="Logo" className={`h-4 w-4 opacity-60 ${theme === 'dark' ? 'invert' : ''}`} />
+          <span className="text-[13px] font-medium text-secondary">
             {selectedInstance ? selectedInstance.projectName : 'Claude ADE'}
           </span>
           {selectedInstance?.branchName && (
             <>
-              <GitBranch className="h-3 w-3 text-neutral-600" />
-              <span className="text-[12px] text-neutral-500">{selectedInstance.branchName}</span>
+              <GitBranch className="h-3 w-3 text-faint" />
+              <span className="text-[12px] text-muted">{selectedInstance.branchName}</span>
             </>
           )}
         </div>
@@ -294,11 +298,11 @@ export default function App() {
         {/* Status indicator + task description */}
         {selectedInstance && (
           <>
-            <span className="mx-3 text-neutral-800">|</span>
+            <span className="mx-3 text-faint">|</span>
             <StatusIcon status={selectedInstance.status} />
             {selectedInstance.taskDescription && (
               <div className="mx-3 min-w-0 flex-1">
-                <span className="block truncate text-[12px] text-neutral-500">
+                <span className="block truncate text-[12px] text-muted">
                   {selectedInstance.taskDescription}
                 </span>
               </div>
@@ -333,20 +337,27 @@ export default function App() {
             </span>
           )}
           {queue.length > 0 && (
-            <span className="text-[11px] text-neutral-500">
+            <span className="text-[11px] text-muted">
               {queue.length} waiting
             </span>
           )}
           <button
+            onClick={() => setSettingsOpen(true)}
+            className="rounded p-1 text-faint transition-colors hover:text-secondary"
+            title="Settings"
+          >
+            <Settings className="h-3.5 w-3.5" />
+          </button>
+          <button
             onClick={() => setLeftOpen(prev => !prev)}
-            className={`rounded p-1 transition-colors hover:text-neutral-300 ${leftOpen ? 'text-neutral-400' : 'text-neutral-600'}`}
+            className={`rounded p-1 transition-colors hover:text-secondary ${leftOpen ? 'text-tertiary' : 'text-faint'}`}
             title={leftOpen ? 'Hide tasks' : 'Show tasks'}
           >
             <PanelLeft className="h-3.5 w-3.5" />
           </button>
           <button
             onClick={() => setRightOpen(prev => !prev)}
-            className={`rounded p-1 transition-colors hover:text-neutral-300 ${rightOpen ? 'text-neutral-400' : 'text-neutral-600'}`}
+            className={`rounded p-1 transition-colors hover:text-secondary ${rightOpen ? 'text-tertiary' : 'text-faint'}`}
             title={rightOpen ? 'Collapse files' : 'Expand files'}
           >
             <PanelRight className="h-3.5 w-3.5" />
@@ -377,7 +388,7 @@ export default function App() {
         )}
 
         {/* Main content */}
-        <main className="flex flex-1 flex-col overflow-hidden rounded-xl bg-[#161616]">
+        <main className="flex flex-1 flex-col overflow-hidden rounded-xl bg-surface">
           {/* Chat area */}
           <div className="flex-1 overflow-hidden">
           {selectedInstance ? (
@@ -396,13 +407,13 @@ export default function App() {
           ) : (
             <div className="flex h-full items-center justify-center">
               <div className="max-w-xs text-center">
-                <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#1e1e1e]">
-                  <MessageSquare className="h-7 w-7 text-neutral-600" />
+                <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-elevated">
+                  <MessageSquare className="h-7 w-7 text-faint" />
                 </div>
-                <p className="text-[15px] font-medium text-neutral-400">
+                <p className="text-[15px] font-medium text-tertiary">
                   No task selected
                 </p>
-                <p className="mt-2 text-[13px] leading-relaxed text-neutral-600">
+                <p className="mt-2 text-[13px] leading-relaxed text-faint">
                   Create a new task from the sidebar or select a project from the Projects panel.
                 </p>
               </div>
@@ -455,6 +466,10 @@ export default function App() {
         />
       )}
 
+      {settingsOpen && (
+        <SettingsModal onClose={() => setSettingsOpen(false)} />
+      )}
+
       {scanPathsOpen && (
         <ScanPathsModal
           scanPaths={config?.scanPaths ?? []}
@@ -474,11 +489,11 @@ function StatusIcon({ status }: { status: InstanceStatus }) {
     case 'waiting_input':
       return <Pause className="h-4 w-4 text-emerald-300" />;
     case 'idle':
-      return <Circle className="h-4 w-4 text-neutral-500" />;
+      return <Circle className="h-4 w-4 text-muted" />;
     case 'exited':
-      return <CheckCircle2 className="h-4 w-4 text-neutral-500" />;
+      return <CheckCircle2 className="h-4 w-4 text-muted" />;
     default:
-      return <AlertCircle className="h-4 w-4 text-neutral-600" />;
+      return <AlertCircle className="h-4 w-4 text-faint" />;
   }
 }
 
@@ -524,21 +539,21 @@ function NewTaskPicker({
       onClick={onClose}
     >
       <div
-        className="mx-4 flex w-full max-w-sm flex-col overflow-hidden rounded-xl border border-[#1e1e1e] bg-[#111111] shadow-2xl"
+        className="mx-4 flex w-full max-w-sm flex-col overflow-hidden rounded-xl border border-border-default bg-modal shadow-2xl"
         style={{ maxHeight: '420px' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Search */}
-        <div className="border-b border-[#1e1e1e] px-4 py-3">
+        <div className="border-b border-border-default px-4 py-3">
           <div className="flex items-center gap-2">
-            <Search className="h-3.5 w-3.5 text-neutral-600" />
+            <Search className="h-3.5 w-3.5 text-faint" />
             <input
               type="text"
               placeholder="Pick a project..."
               value={filter}
               onChange={e => setFilter(e.target.value)}
               autoFocus
-              className="w-full bg-transparent text-[14px] text-neutral-300 placeholder-neutral-600 outline-none"
+              className="w-full bg-transparent text-[14px] text-secondary placeholder-placeholder outline-none"
             />
           </div>
         </div>
@@ -546,17 +561,17 @@ function NewTaskPicker({
         {/* Project list */}
         <div className="flex-1 overflow-y-auto px-2 py-2">
           {filtered.length === 0 ? (
-            <p className="py-6 text-center text-[12px] text-neutral-700">No projects found</p>
+            <p className="py-6 text-center text-[12px] text-faint">No projects found</p>
           ) : (
             filtered.map(project => (
               <button
                 key={project.path}
                 onClick={() => setSelected(project)}
-                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-[#1a1a1a]"
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left transition-colors hover:bg-hover"
               >
-                <span className="truncate text-[13px] text-neutral-300">{project.name}</span>
+                <span className="truncate text-[13px] text-secondary">{project.name}</span>
                 {project.gitBranch && (
-                  <span className="ml-auto shrink-0 text-[11px] text-neutral-600">{project.gitBranch}</span>
+                  <span className="ml-auto shrink-0 text-[11px] text-faint">{project.gitBranch}</span>
                 )}
               </button>
             ))

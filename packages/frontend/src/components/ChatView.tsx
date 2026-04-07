@@ -3,8 +3,9 @@ import { ChevronDown, ChevronRight, ChevronUp, Loader, Copy, Check, BookOpen, Pe
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useSocket } from '../hooks/useSocket';
+import { useTheme } from '../contexts/ThemeContext';
 import type { ChatMessage, ContentBlock, ContextAttachment, SessionInfo } from '../types';
 
 
@@ -45,13 +46,13 @@ function extInfo(ext: string): { lang: string; color: string } {
     case 'css': case 'scss': return { lang: 'CSS', color: 'text-pink-300 bg-pink-400/10' };
     case 'html': return { lang: 'HTML', color: 'text-orange-300/80 bg-orange-400/10' };
     case 'json': return { lang: 'JSON', color: 'text-yellow-300 bg-yellow-300/10' };
-    case 'md': case 'mdx': return { lang: 'MD', color: 'text-neutral-400 bg-neutral-400/10' };
+    case 'md': case 'mdx': return { lang: 'MD', color: 'text-tertiary bg-neutral-400/10' };
     case 'yaml': case 'yml': return { lang: 'YML', color: 'text-green-300 bg-green-300/10' };
-    case 'toml': return { lang: 'TOML', color: 'text-neutral-400 bg-neutral-400/10' };
+    case 'toml': return { lang: 'TOML', color: 'text-tertiary bg-neutral-400/10' };
     case 'sql': return { lang: 'SQL', color: 'text-blue-300 bg-blue-300/10' };
     case 'sh': case 'bash': case 'zsh': return { lang: 'SH', color: 'text-emerald-300 bg-green-400/10' };
     case 'scala': return { lang: 'SC', color: 'text-red-300 bg-red-300/10' };
-    default: return { lang: ext.toUpperCase().slice(0, 3) || 'FILE', color: 'text-neutral-500 bg-neutral-500/10' };
+    default: return { lang: ext.toUpperCase().slice(0, 3) || 'FILE', color: 'text-muted bg-neutral-500/10' };
   }
 }
 
@@ -825,8 +826,8 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     <div className="flex h-full flex-col">
       {/* Session info bar */}
       {sessionInfo?.tools && sessionInfo.tools.length > 0 && (
-        <div className="shrink-0 border-b border-[#1a1a1a] px-6 py-1.5">
-          <div className="mx-auto flex max-w-3xl items-center gap-3 text-[11px] text-neutral-600">
+        <div className="shrink-0 border-b border-border-subtle px-6 py-1.5">
+          <div className="mx-auto flex max-w-3xl items-center gap-3 text-[11px] text-faint">
             <span className="flex items-center gap-1">
               <Server className="h-3 w-3" />
               {sessionInfo.tools.length} tools
@@ -842,7 +843,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             )}
             {contextUsage && contextUsage.maxTokens > 0 && (
               <span className="flex items-center gap-1.5" title={`${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.maxTokens.toLocaleString()} tokens`}>
-                <div className="h-1 w-16 overflow-hidden rounded-full bg-[#222]">
+                <div className="h-1 w-16 overflow-hidden rounded-full bg-badge">
                   <div
                     className={`h-full rounded-full transition-all ${
                       contextUsage.usedTokens / contextUsage.maxTokens > 0.9 ? 'bg-rose-400'
@@ -863,7 +864,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4">
         {messages.length === 0 && streamingBlocks.length === 0 && !isProcessing && !streamingText && (
           <div className="flex h-full items-center justify-center">
-            <p className="text-[13px] text-neutral-600">Start a conversation...</p>
+            <p className="text-[13px] text-faint">Start a conversation...</p>
           </div>
         )}
 
@@ -962,15 +963,15 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
           {/* Slash command autocomplete */}
           {showAutocomplete && (
             <div className="absolute bottom-full left-6 right-6 z-20 mb-1">
-              <div className="mx-auto max-w-3xl overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#141414] shadow-xl">
+              <div className="mx-auto max-w-3xl overflow-hidden rounded-lg border border-border-input bg-popover shadow-xl">
                 <div className="max-h-64 overflow-y-auto py-1">
                   {acMatches.map((cmd, i) => (
                     <button
                       key={cmd.raw}
                       onMouseDown={e => { e.preventDefault(); setInput(`/${cmd.raw} `); }}
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${i === acIndex ? 'bg-[#1e1e1e]' : 'hover:bg-[#1a1a1a]'}`}
+                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${i === acIndex ? 'bg-elevated' : 'hover:bg-hover'}`}
                     >
-                      <span className="text-[13px] font-medium text-neutral-300">/{cmd.display}</span>
+                      <span className="text-[13px] font-medium text-secondary">/{cmd.display}</span>
                       <span className={`ml-auto shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${cmd.badgeColor}`}>
                         {cmd.badge}
                       </span>
@@ -1033,16 +1034,16 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
               {contextItems.map((item, i) => (
                 <span
                   key={i}
-                  className="flex items-center gap-1.5 rounded-md border border-[#2a2a2a] bg-[#1a1a1a] px-2 py-1 text-[12px] text-neutral-400"
+                  className="flex items-center gap-1.5 rounded-md border border-border-input bg-hover px-2 py-1 text-[12px] text-tertiary"
                 >
-                  {item.type === 'file' && <FileText className="h-3 w-3 text-neutral-600" />}
-                  {item.type === 'branch' && <GitBranchIcon className="h-3 w-3 text-neutral-600" />}
-                  {item.type === 'commit' && <GitCommit className="h-3 w-3 text-neutral-600" />}
-                  {item.type === 'changes' && <FileDiff className="h-3 w-3 text-neutral-600" />}
+                  {item.type === 'file' && <FileText className="h-3 w-3 text-faint" />}
+                  {item.type === 'branch' && <GitBranchIcon className="h-3 w-3 text-faint" />}
+                  {item.type === 'commit' && <GitCommit className="h-3 w-3 text-faint" />}
+                  {item.type === 'changes' && <FileDiff className="h-3 w-3 text-faint" />}
                   <span className="max-w-[150px] truncate">{item.label}</span>
                   <button
                     onClick={() => removeContext(i)}
-                    className="ml-0.5 text-neutral-600 hover:text-neutral-400"
+                    className="ml-0.5 text-faint hover:text-tertiary"
                   >
                     &times;
                   </button>
@@ -1054,7 +1055,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
           {/* @ mention dropdown */}
           {mentionActive && mentionResults.length > 0 && (
             <div className="absolute bottom-full left-6 right-6 z-20 mb-1">
-              <div className="mx-auto max-w-3xl overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#141414] shadow-xl">
+              <div className="mx-auto max-w-3xl overflow-hidden rounded-lg border border-border-input bg-popover shadow-xl">
                 <div className="max-h-48 overflow-y-auto py-1">
                   {mentionResults.map((item, i) => {
                     const info = extInfo(item.ext);
@@ -1073,12 +1074,12 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
                           setMentionActive(false);
                           setMentionQuery('');
                         }}
-                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${i === mentionIndex ? 'bg-[#1e1e1e]' : 'hover:bg-[#1a1a1a]'}`}
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${i === mentionIndex ? 'bg-elevated' : 'hover:bg-hover'}`}
                       >
                         <span className={`rounded px-1 py-0.5 text-[9px] font-bold leading-none ${info.color}`}>
                           {info.lang}
                         </span>
-                        <span className="truncate text-[12px] text-neutral-300">{item.label}</span>
+                        <span className="truncate text-[12px] text-secondary">{item.label}</span>
                       </button>
                     );
                   })}
@@ -1120,13 +1121,13 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
                 else { setContextMenuOpen(prev => !prev); }
                 setModelOpen(false); setPermissionOpen(false); setEffortOpen(false);
               }}
-              className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg border border-[#2a2a2a] text-neutral-600 transition-colors hover:border-[#333] hover:text-neutral-400"
+              className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg border border-border-input text-faint transition-colors hover:border-border-focus hover:text-tertiary"
             >
               <Plus className="h-4 w-4" />
             </button>
 
             {/* Input */}
-            <div className="flex min-h-[36px] flex-1 rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] px-4 py-[7px]">
+            <div className="flex min-h-[36px] flex-1 rounded-xl border border-border-input bg-root px-4 py-[7px]">
               <textarea
                 ref={inputRef}
                 value={input}
@@ -1135,7 +1136,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
                 placeholder="Follow-up on this task, @ for mentions, / for commands"
                 rows={1}
                 disabled={status === 'exited'}
-                className="flex-1 resize-none bg-transparent text-[14px] leading-snug text-neutral-300 placeholder-neutral-600 outline-none disabled:opacity-50"
+                className="flex-1 resize-none bg-transparent text-[14px] leading-snug text-secondary placeholder-placeholder outline-none disabled:opacity-50"
                 style={{ minHeight: '20px', maxHeight: '120px' }}
                 onInput={e => {
                   const el = e.target as HTMLTextAreaElement;
@@ -1153,7 +1154,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             <div className="relative">
               <button
                 onClick={() => { setModelOpen(prev => !prev); setPermissionOpen(false); setEffortOpen(false); setContextMenuOpen(false); }}
-                className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] text-neutral-500 transition-colors hover:bg-[#1a1a1a] hover:text-neutral-300"
+                className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] text-muted transition-colors hover:bg-hover hover:text-secondary"
               >
                 <Sparkles className="h-3 w-3" />
                 <span>{MODEL_OPTIONS.find(m => m.id === selectedModel)?.label ?? 'Sonnet 4.6'}</span>
@@ -1178,7 +1179,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             <div className="relative">
               <button
                 onClick={() => { setPermissionOpen(prev => !prev); setModelOpen(false); setEffortOpen(false); setContextMenuOpen(false); }}
-                className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] text-neutral-500 transition-colors hover:bg-[#1a1a1a] hover:text-neutral-300"
+                className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] text-muted transition-colors hover:bg-hover hover:text-secondary"
               >
                 <span>{PERMISSION_OPTIONS.find(p => p.id === permissionMode)?.label ?? 'Ask Permission'}</span>
                 <ChevronUp className="h-3 w-3" />
@@ -1196,10 +1197,10 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             <div className="relative">
               <button
                 onClick={() => { setEffortOpen(prev => !prev); setModelOpen(false); setPermissionOpen(false); setContextMenuOpen(false); }}
-                className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-colors hover:bg-[#1a1a1a] ${
+                className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-colors hover:bg-hover ${
                   effortLevel === 'high' ? 'text-violet-300/70 hover:text-violet-300'
                     : effortLevel === 'medium' ? 'text-blue-300/70 hover:text-blue-300'
-                    : 'text-neutral-400/70 hover:text-neutral-300'
+                    : 'text-tertiary/70 hover:text-secondary'
                 }`}
               >
                 <BrainIcon className="h-4 w-4" />
@@ -1214,7 +1215,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
                     icon: <BrainIcon className={`h-3.5 w-3.5 ${
                       e.id === 'high' ? 'text-violet-300'
                         : e.id === 'medium' ? 'text-blue-300'
-                        : 'text-neutral-400'
+                        : 'text-tertiary'
                     }`} />,
                   }))}
                   onSelect={(id) => { setEffortLevel(id); setEffortOpen(false); }}
@@ -1243,7 +1244,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
                 className={`flex items-center gap-1.5 rounded-lg px-3 py-1 text-[12px] transition-colors disabled:opacity-30 ${
                   rateLimitInfo && rateLimitInfo.status !== 'allowed'
                     ? 'text-amber-500/50 cursor-not-allowed'
-                    : 'text-neutral-500 hover:bg-[#1a1a1a] hover:text-neutral-300'
+                    : 'text-muted hover:bg-hover hover:text-secondary'
                 }`}
               >
                 <span>Send</span>
@@ -1274,7 +1275,7 @@ function ToolActionsHeader({ tools, isProcessing, expanded, onToggle }: {
     <div>
       <button
         onClick={onToggle}
-        className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+        className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-tertiary"
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         {isProcessing && lastToolInfo && LastIcon ? (
@@ -1285,7 +1286,7 @@ function ToolActionsHeader({ tools, isProcessing, expanded, onToggle }: {
         <span>
           {isProcessing
             ? lastToolInfo
-              ? <><span className="text-blue-300/80">{lastToolInfo.label}</span>{toolCount > 1 && <span className="ml-1 text-neutral-600">+{toolCount - 1}</span>}</>
+              ? <><span className="text-blue-300/80">{lastToolInfo.label}</span>{toolCount > 1 && <span className="ml-1 text-faint">+{toolCount - 1}</span>}</>
               : 'Processing...'
             : `Processed (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})`
           }
@@ -1293,7 +1294,7 @@ function ToolActionsHeader({ tools, isProcessing, expanded, onToggle }: {
       </button>
 
       {expanded && toolCount > 0 && (
-        <div className="ml-5 mt-1.5 space-y-1.5 border-l border-[#1e1e1e] pl-3">
+        <div className="ml-5 mt-1.5 space-y-1.5 border-l border-border-default pl-3">
           {tools.map((tool, i) => (
             <ToolLine
               key={i}
@@ -1341,7 +1342,7 @@ function LiveWorkingBlock({
     <div className="space-y-3">
       {/* Connecting indicator — shown before any content arrives */}
       {isConnecting && !hasThinking && !hasStreamingText && toolCount === 0 && (
-        <div className="flex items-center gap-2 text-[13px] text-neutral-500">
+        <div className="flex items-center gap-2 text-[13px] text-muted">
           <Loader className="h-3 w-3 animate-spin text-blue-300" />
           <span>Connecting...</span>
         </div>
@@ -1352,7 +1353,7 @@ function LiveWorkingBlock({
         <div>
           <button
             onClick={() => setThinkingExpanded(!thinkingExpanded)}
-            className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+            className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-tertiary"
           >
             {thinkingExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
             <BrainIcon className="h-3.5 w-3.5 text-violet-400" />
@@ -1368,7 +1369,7 @@ function LiveWorkingBlock({
           </button>
           {thinkingExpanded && (
             <div className="ml-5 mt-1.5 max-h-48 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 px-3 py-2">
-              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-500">{thinkingText}</p>
+              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted">{thinkingText}</p>
             </div>
           )}
         </div>
@@ -1386,10 +1387,10 @@ function LiveWorkingBlock({
 
       {/* Tool progress indicator ��� real-time elapsed time during long tool runs */}
       {toolProgress && isProcessing && (
-        <div className="flex items-center gap-2 text-[12px] text-neutral-600">
+        <div className="flex items-center gap-2 text-[12px] text-faint">
           <ToolProgressRing seconds={toolProgress.elapsedSeconds} />
           <span>{toolProgress.toolName}</span>
-          <span className="tabular-nums text-neutral-700">{Math.round(toolProgress.elapsedSeconds)}s</span>
+          <span className="tabular-nums text-faint">{Math.round(toolProgress.elapsedSeconds)}s</span>
         </div>
       )}
 
@@ -1397,7 +1398,7 @@ function LiveWorkingBlock({
       {hasStreamingText && (
         <div className="prose prose-invert max-w-none">
           {isProcessing ? (
-            <pre className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-neutral-300 font-sans">
+            <pre className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-secondary font-sans">
               {streamingText}
               <span className="inline-block h-4 w-0.5 animate-pulse bg-blue-400 align-text-bottom ml-0.5" />
             </pre>
@@ -1423,7 +1424,7 @@ function ToolProgressRing({ seconds }: { seconds: number }) {
   const offset = circumference * (1 - progress);
   return (
     <svg className="h-3.5 w-3.5 -rotate-90" viewBox="0 0 14 14">
-      <circle cx="7" cy="7" r={r} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-neutral-800" />
+      <circle cx="7" cy="7" r={r} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-faint" />
       <circle cx="7" cy="7" r={r} fill="none" stroke="currentColor" strokeWidth="1.5"
         className="text-blue-400 transition-all"
         strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" />
@@ -1462,11 +1463,11 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
     const attachments = message.contextAttachments;
     return (
       <div className="flex justify-end">
-        <div className="max-w-[80%] space-y-1.5 rounded-2xl rounded-br-sm bg-[#2a2a2a] px-4 py-2.5">
+        <div className="max-w-[80%] space-y-1.5 rounded-2xl rounded-br-sm bg-input px-4 py-2.5">
           {attachments && attachments.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {attachments.map((att, i) => (
-                <span key={i} className="inline-flex items-center gap-1 rounded border border-[#3a3a3a] bg-[#222] px-1.5 py-0.5 text-[11px] text-neutral-400">
+                <span key={i} className="inline-flex items-center gap-1 rounded border border-border-input bg-badge px-1.5 py-0.5 text-[11px] text-tertiary">
                   {att.type === 'file' && <FileText className="h-2.5 w-2.5" />}
                   {att.type === 'branch' && <GitBranchIcon className="h-2.5 w-2.5" />}
                   {att.type === 'commit' && <GitCommit className="h-2.5 w-2.5" />}
@@ -1476,7 +1477,7 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
               ))}
             </div>
           )}
-          <p className="text-[14px] leading-relaxed text-neutral-200">{text}</p>
+          <p className="text-[14px] leading-relaxed text-primary">{text}</p>
         </div>
       </div>
     );
@@ -1562,16 +1563,16 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
     <div>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+        className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-tertiary"
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <BrainIcon className="h-3.5 w-3.5 text-violet-400/60" />
         <span className="text-violet-400/50">Thought process</span>
-        {!expanded && <span className="max-w-[300px] truncate text-[11px] text-neutral-700">{preview}...</span>}
+        {!expanded && <span className="max-w-[300px] truncate text-[11px] text-faint">{preview}...</span>}
       </button>
       {expanded && (
         <div className="ml-5 mt-1.5 max-h-64 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 px-3 py-2">
-          <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-500">{thinking}</p>
+          <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted">{thinking}</p>
         </div>
       )}
     </div>
@@ -1588,7 +1589,7 @@ function ProcessedGroup({ tools }: { tools: ToolEntry[] }) {
     <div>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+        className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-tertiary"
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         {hasErrors
@@ -1598,7 +1599,7 @@ function ProcessedGroup({ tools }: { tools: ToolEntry[] }) {
         <span>Processed ({tools.length} {tools.length === 1 ? 'action' : 'actions'})</span>
       </button>
       {expanded && (
-        <div className="ml-5 mt-1.5 space-y-1.5 border-l border-[#1e1e1e] pl-3">
+        <div className="ml-5 mt-1.5 space-y-1.5 border-l border-border-default pl-3">
           {tools.map((tool, i) => (
             <ToolLine
               key={i}
@@ -1684,19 +1685,19 @@ function ToolLine({ name, input, result, isLive, isLast }: {
     <div className="space-y-0.5">
       <button
         onClick={() => isExpandable && setShowDetails(prev => !prev)}
-        className={`flex items-center gap-2 text-[12px] text-neutral-600 ${isExpandable ? 'cursor-pointer hover:text-neutral-400' : ''}`}
+        className={`flex items-center gap-2 text-[12px] text-faint ${isExpandable ? 'cursor-pointer hover:text-tertiary' : ''}`}
       >
-        <Icon className={`h-3 w-3 shrink-0 ${shouldAnimate ? 'animate-pulse text-blue-300' : result?.is_error ? 'text-rose-300' : 'text-neutral-600'}`} />
-        <span className={shouldAnimate ? 'text-neutral-400' : ''}>{info.label}</span>
+        <Icon className={`h-3 w-3 shrink-0 ${shouldAnimate ? 'animate-pulse text-blue-300' : result?.is_error ? 'text-rose-300' : 'text-faint'}`} />
+        <span className={shouldAnimate ? 'text-tertiary' : ''}>{info.label}</span>
         {isExpandable && (
           showDetails
-            ? <ChevronDown className="h-2.5 w-2.5 text-neutral-700" />
-            : <ChevronRight className="h-2.5 w-2.5 text-neutral-700" />
+            ? <ChevronDown className="h-2.5 w-2.5 text-faint" />
+            : <ChevronRight className="h-2.5 w-2.5 text-faint" />
         )}
       </button>
       {/* Inline context or 1-line result preview when collapsed */}
       {!showDetails && (
-        <div className="ml-5 truncate text-[11px] font-mono text-neutral-700">
+        <div className="ml-5 truncate text-[11px] font-mono text-faint">
           {context ?? (hasResult && getResultPreview(result))}
         </div>
       )}
@@ -1704,7 +1705,7 @@ function ToolLine({ name, input, result, isLive, isLast }: {
         <div className="ml-5 mt-1 space-y-1">
           {/* Edit diff — prefer structured patch from tool result if available */}
           {hasEditDiff && inp && (
-            <div className="overflow-x-auto rounded border border-[#1e1e1e] bg-[#0a0a0a] text-[11px]">
+            <div className="overflow-x-auto rounded border border-border-default bg-codeblock text-[11px]">
               {hasStructuredPatch ? (
                 <StructuredPatchView filePath={inp.file_path as string} patches={result!.structuredPatch!} />
               ) : (
@@ -1718,7 +1719,7 @@ function ToolLine({ name, input, result, isLive, isLast }: {
           )}
           {/* Tool stdout */}
           {result?.stdout && (
-            <pre className="max-h-40 overflow-auto rounded border border-[#1e1e1e] bg-[#0a0a0a] px-2 py-1.5 text-[11px] font-mono text-neutral-500">
+            <pre className="max-h-40 overflow-auto rounded border border-border-default bg-codeblock px-2 py-1.5 text-[11px] font-mono text-muted">
               {result.stdout.slice(0, 3000)}
               {result.stdout.length > 3000 && '\n... (truncated)'}
             </pre>
@@ -1731,7 +1732,7 @@ function ToolLine({ name, input, result, isLive, isLast }: {
           )}
           {/* Tool result content (fallback) */}
           {!result?.stdout && !result?.stderr && result?.content && (
-            <pre className="max-h-40 overflow-auto rounded border border-[#1e1e1e] bg-[#0a0a0a] px-2 py-1.5 text-[11px] font-mono text-neutral-500">
+            <pre className="max-h-40 overflow-auto rounded border border-border-default bg-codeblock px-2 py-1.5 text-[11px] font-mono text-muted">
               {result.content.slice(0, 3000)}
               {result.content.length > 3000 && '\n... (truncated)'}
             </pre>
@@ -1852,7 +1853,7 @@ function PermissionPrompt({
 
   return (
     <div className="shrink-0 px-6 py-3">
-      <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-blue-500/30 bg-[#141418]">
+      <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-blue-500/30 bg-popover">
         {/* Header */}
         <div className="px-5 pt-4 pb-2">
           <div className="flex items-center gap-2">
@@ -1866,13 +1867,13 @@ function PermissionPrompt({
             )}
           </div>
           {fileName && (
-            <p className="mt-0.5 text-[12px] text-neutral-500">{fileName}</p>
+            <p className="mt-0.5 text-[12px] text-muted">{fileName}</p>
           )}
         </div>
 
         {/* Preview */}
         {isEdit && filePath != null && (
-          <div className="mx-5 mb-3 overflow-hidden rounded border border-[#1e1e1e] bg-[#0a0a0a]">
+          <div className="mx-5 mb-3 overflow-hidden rounded border border-border-default bg-codeblock">
             <EditDiffView
               filePath={filePath}
               oldString={inp?.old_string as string | undefined}
@@ -1881,7 +1882,7 @@ function PermissionPrompt({
           </div>
         )}
         {isWrite && filePath != null && (
-          <div className="mx-5 mb-3 overflow-hidden rounded border border-[#1e1e1e] bg-[#0a0a0a]">
+          <div className="mx-5 mb-3 overflow-hidden rounded border border-border-default bg-codeblock">
             <EditDiffView
               filePath={filePath}
               newString={typeof inp?.content === 'string' ? inp.content.slice(0, 2000) : undefined}
@@ -1889,18 +1890,18 @@ function PermissionPrompt({
           </div>
         )}
         {isBash && typeof inp?.command === 'string' && (
-          <pre className="mx-5 mb-3 max-h-32 overflow-auto rounded border border-[#1e1e1e] bg-[#0a0a0a] px-3 py-2 text-[12px] font-mono text-neutral-400">
+          <pre className="mx-5 mb-3 max-h-32 overflow-auto rounded border border-border-default bg-codeblock px-3 py-2 text-[12px] font-mono text-tertiary">
             $ {inp.command}
           </pre>
         )}
         {!isFileOp && !isBash && inp != null && (
-          <pre className="mx-5 mb-3 max-h-24 overflow-auto text-[11px] text-neutral-500">
+          <pre className="mx-5 mb-3 max-h-24 overflow-auto text-[11px] text-muted">
             {filePath ?? (inp.pattern ? String(inp.pattern) : JSON.stringify(inp, null, 2).slice(0, 200))}
           </pre>
         )}
 
         {/* Question */}
-        <p className="px-5 pb-3 text-[13px] font-medium text-neutral-300">
+        <p className="px-5 pb-3 text-[13px] font-medium text-secondary">
           {isFileOp
             ? `Do you want to make this edit to ${fileName ?? 'this file'}?`
             : isBash
@@ -1912,37 +1913,37 @@ function PermissionPrompt({
         <div className="flex flex-col gap-1 px-5 pb-4">
           <button
             onClick={onApproveSession}
-            className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1a1a1e]"
+            className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-hover"
           >
             <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-blue-500/70 text-[11px] font-semibold text-white">1</div>
             <div className="flex items-center gap-2">
-              <span className="text-[13px] font-medium text-neutral-300">Yes</span>
-              <kbd className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500">1</kbd>
+              <span className="text-[13px] font-medium text-secondary">Yes</span>
+              <kbd className="rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted">1</kbd>
             </div>
           </button>
           <button
             onClick={onApproveProject}
-            className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1a1a1e]"
+            className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-hover"
           >
-            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-neutral-700/50 text-[11px] font-semibold text-neutral-400">2</div>
+            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-elevated/50 text-[11px] font-semibold text-tertiary">2</div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-[13px] font-medium text-neutral-300">
+                <span className="text-[13px] font-medium text-secondary">
                   Yes, allow all {isFileOp ? 'edits' : isBash ? 'commands' : 'uses'} during this session
                 </span>
-                <kbd className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500">2</kbd>
+                <kbd className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted">2</kbd>
               </div>
             </div>
           </button>
           <button
             onClick={() => setRejectMode(true)}
-            className={`flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${rejectMode ? 'bg-blue-500/10' : 'hover:bg-[#1a1a1e]'}`}
+            className={`flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${rejectMode ? 'bg-blue-500/10' : 'hover:bg-hover'}`}
           >
-            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-neutral-700/50 text-[11px] font-semibold text-neutral-400">3</div>
+            <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-elevated/50 text-[11px] font-semibold text-tertiary">3</div>
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="text-[13px] font-medium text-neutral-300">No, and tell Claude what to do differently</span>
-                <kbd className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500">3</kbd>
+                <span className="text-[13px] font-medium text-secondary">No, and tell Claude what to do differently</span>
+                <kbd className="shrink-0 rounded bg-elevated px-1.5 py-0.5 text-[10px] text-muted">3</kbd>
               </div>
             </div>
           </button>
@@ -1950,19 +1951,19 @@ function PermissionPrompt({
 
         {/* Reject message input */}
         {rejectMode && (
-          <div className="border-t border-[#1e1e1e] px-5 py-3">
+          <div className="border-t border-border-default px-5 py-3">
             <textarea
               ref={rejectInputRef}
               value={rejectMessage}
               onChange={e => setRejectMessage(e.target.value)}
               placeholder="Tell Claude what to do instead..."
               rows={2}
-              className="w-full resize-none rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-2 text-[13px] text-neutral-300 placeholder-neutral-600 outline-none focus:border-blue-500/50"
+              className="w-full resize-none rounded-lg border border-border-input bg-root px-3 py-2 text-[13px] text-secondary placeholder-placeholder outline-none focus:border-blue-500/50"
             />
             <div className="mt-2 flex items-center justify-end gap-2">
               <button
                 onClick={() => { setRejectMode(false); setRejectMessage(''); }}
-                className="rounded-lg px-3 py-1.5 text-[12px] font-medium text-neutral-400 transition-colors hover:bg-[#1a1a1e]"
+                className="rounded-lg px-3 py-1.5 text-[12px] font-medium text-tertiary transition-colors hover:bg-hover"
               >
                 Cancel
               </button>
@@ -1986,7 +1987,7 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
   const shortPath = shortenPath(filePath ?? '');
 
   if (!oldString && !newString) {
-    return <p className="px-3 py-2 text-neutral-600">No changes</p>;
+    return <p className="px-3 py-2 text-faint">No changes</p>;
   }
 
   // For Write tool (no old_string), show as all additions
@@ -1994,9 +1995,9 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
     const lines = newString.split('\n');
     return (
       <div>
-        <div className="flex items-center gap-2 border-b border-[#1e1e1e] bg-[#111] px-3 py-1.5">
+        <div className="flex items-center gap-2 border-b border-border-default bg-modal px-3 py-1.5">
           <FilePlus className="h-3 w-3 text-emerald-300" />
-          <span className="text-[11px] font-mono text-neutral-400">{shortPath}</span>
+          <span className="text-[11px] font-mono text-tertiary">{shortPath}</span>
           <span className="text-[10px] text-emerald-300/70">+{lines.length} lines</span>
         </div>
         <div className="max-h-64 overflow-auto">
@@ -2004,13 +2005,13 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
             <tbody>
               {lines.slice(0, 50).map((line, i) => (
                 <tr key={i} className="bg-emerald-950/10">
-                  <td className="w-10 select-none border-r border-[#1e1e1e] px-2 text-right text-neutral-700">{i + 1}</td>
+                  <td className="w-10 select-none border-r border-border-default px-2 text-right text-faint">{i + 1}</td>
                   <td className="w-5 select-none px-1 text-center text-emerald-400/70">+</td>
                   <td className="whitespace-pre-wrap break-all px-2 text-emerald-300/90">{line || ' '}</td>
                 </tr>
               ))}
               {lines.length > 50 && (
-                <tr><td colSpan={3} className="px-3 py-1 text-neutral-600">...+{lines.length - 50} more lines</td></tr>
+                <tr><td colSpan={3} className="px-3 py-1 text-faint">...+{lines.length - 50} more lines</td></tr>
               )}
             </tbody>
           </table>
@@ -2029,9 +2030,9 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
   return (
     <div>
       {/* File header */}
-      <div className="flex items-center gap-2 border-b border-[#1e1e1e] bg-[#111] px-3 py-1.5">
+      <div className="flex items-center gap-2 border-b border-border-default bg-modal px-3 py-1.5">
         <Pencil className="h-3 w-3 text-blue-300" />
-        <span className="text-[11px] font-mono text-neutral-400">{shortPath}</span>
+        <span className="text-[11px] font-mono text-tertiary">{shortPath}</span>
         <div className="ml-auto flex items-center gap-2 text-[10px]">
           {removedCount > 0 && <span className="text-rose-300/70">-{removedCount}</span>}
           {addedCount > 0 && <span className="text-emerald-300/70">+{addedCount}</span>}
@@ -2045,19 +2046,19 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
               const bgClass = d.type === 'removed' ? 'bg-rose-950/10'
                 : d.type === 'added' ? 'bg-emerald-950/10'
                 : '';
-              const numColor = d.type === 'same' ? 'text-neutral-700' : 'text-neutral-600';
-              const signColor = d.type === 'removed' ? 'text-rose-300/70' : d.type === 'added' ? 'text-emerald-400/70' : 'text-neutral-800';
+              const numColor = d.type === 'same' ? 'text-faint' : 'text-faint';
+              const signColor = d.type === 'removed' ? 'text-rose-300/70' : d.type === 'added' ? 'text-emerald-400/70' : 'text-faint';
               const textColor = d.type === 'removed' ? 'text-rose-300/80'
                 : d.type === 'added' ? 'text-emerald-300/90'
-                : 'text-neutral-500';
+                : 'text-muted';
               const sign = d.type === 'removed' ? '-' : d.type === 'added' ? '+' : ' ';
 
               return (
                 <tr key={i} className={bgClass}>
-                  <td className={`w-8 select-none border-r border-[#1a1a1a] px-1.5 text-right ${numColor}`}>
+                  <td className={`w-8 select-none border-r border-border-subtle px-1.5 text-right ${numColor}`}>
                     {d.oldNum ?? ''}
                   </td>
-                  <td className={`w-8 select-none border-r border-[#1a1a1a] px-1.5 text-right ${numColor}`}>
+                  <td className={`w-8 select-none border-r border-border-subtle px-1.5 text-right ${numColor}`}>
                     {d.newNum ?? ''}
                   </td>
                   <td className={`w-4 select-none px-0.5 text-center ${signColor}`}>{sign}</td>
@@ -2066,7 +2067,7 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
               );
             })}
             {diff.length > 80 && (
-              <tr><td colSpan={4} className="px-3 py-1 text-neutral-600">...{diff.length - 80} more lines</td></tr>
+              <tr><td colSpan={4} className="px-3 py-1 text-faint">...{diff.length - 80} more lines</td></tr>
             )}
           </tbody>
         </table>
@@ -2089,9 +2090,9 @@ function StructuredPatchView({ filePath, patches }: { filePath: string; patches:
 
   return (
     <div>
-      <div className="flex items-center gap-2 border-b border-[#1e1e1e] bg-[#111] px-3 py-1.5">
+      <div className="flex items-center gap-2 border-b border-border-default bg-modal px-3 py-1.5">
         <Pencil className="h-3 w-3 text-blue-300" />
-        <span className="text-[11px] font-mono text-neutral-400">{shortPath}</span>
+        <span className="text-[11px] font-mono text-tertiary">{shortPath}</span>
         <div className="ml-auto flex items-center gap-2 text-[10px]">
           {totalRemoved > 0 && <span className="text-rose-300/70">-{totalRemoved}</span>}
           {totalAdded > 0 && <span className="text-emerald-300/70">+{totalAdded}</span>}
@@ -2106,16 +2107,16 @@ function StructuredPatchView({ filePath, patches }: { filePath: string; patches:
               return (
                 <React.Fragment key={hi}>
                   {hi > 0 && (
-                    <tr><td colSpan={4} className="border-y border-[#1a1a1a] bg-[#0d0d0d] px-3 py-0.5 text-[10px] text-neutral-700">...</td></tr>
+                    <tr><td colSpan={4} className="border-y border-border-subtle bg-root px-3 py-0.5 text-[10px] text-faint">...</td></tr>
                   )}
                   {hunk.lines.slice(0, 100).map((line, li) => {
                     const isRemoved = line.startsWith('-');
                     const isAdded = line.startsWith('+');
                     const isContext = !isRemoved && !isAdded;
                     const bgClass = isRemoved ? 'bg-rose-950/10' : isAdded ? 'bg-emerald-950/10' : '';
-                    const numColor = isContext ? 'text-neutral-700' : 'text-neutral-600';
-                    const signColor = isRemoved ? 'text-rose-300/70' : isAdded ? 'text-emerald-400/70' : 'text-neutral-800';
-                    const textColor = isRemoved ? 'text-rose-300/80' : isAdded ? 'text-emerald-300/90' : 'text-neutral-500';
+                    const numColor = isContext ? 'text-faint' : 'text-faint';
+                    const signColor = isRemoved ? 'text-rose-300/70' : isAdded ? 'text-emerald-400/70' : 'text-faint';
+                    const textColor = isRemoved ? 'text-rose-300/80' : isAdded ? 'text-emerald-300/90' : 'text-muted';
                     const sign = isRemoved ? '-' : isAdded ? '+' : ' ';
                     const oNum = isAdded ? '' : oldLine;
                     const nNum = isRemoved ? '' : newLine;
@@ -2123,15 +2124,15 @@ function StructuredPatchView({ filePath, patches }: { filePath: string; patches:
                     if (!isRemoved) newLine++;
                     return (
                       <tr key={`${hi}-${li}`} className={bgClass}>
-                        <td className={`w-8 select-none border-r border-[#1a1a1a] px-1.5 text-right ${numColor}`}>{oNum}</td>
-                        <td className={`w-8 select-none border-r border-[#1a1a1a] px-1.5 text-right ${numColor}`}>{nNum}</td>
+                        <td className={`w-8 select-none border-r border-border-subtle px-1.5 text-right ${numColor}`}>{oNum}</td>
+                        <td className={`w-8 select-none border-r border-border-subtle px-1.5 text-right ${numColor}`}>{nNum}</td>
                         <td className={`w-4 select-none px-0.5 text-center ${signColor}`}>{sign}</td>
                         <td className={`whitespace-pre-wrap break-all px-2 ${textColor}`}>{line.slice(1) || ' '}</td>
                       </tr>
                     );
                   })}
                   {hunk.lines.length > 100 && (
-                    <tr><td colSpan={4} className="px-3 py-1 text-neutral-600">...{hunk.lines.length - 100} more lines</td></tr>
+                    <tr><td colSpan={4} className="px-3 py-1 text-faint">...{hunk.lines.length - 100} more lines</td></tr>
                   )}
                 </React.Fragment>
               );
@@ -2283,10 +2284,10 @@ function DropdownMenu({
   return (
     <div
       ref={ref}
-      className="absolute bottom-full left-0 z-30 mb-1 min-w-[200px] overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#141414] shadow-xl"
+      className="absolute bottom-full left-0 z-30 mb-1 min-w-[200px] overflow-hidden rounded-lg border border-border-input bg-popover shadow-xl"
     >
       {title && (
-        <div className="px-3 py-2 text-[11px] font-medium text-neutral-600">{title}</div>
+        <div className="px-3 py-2 text-[11px] font-medium text-faint">{title}</div>
       )}
       <div className="py-1">
         {items.map(item => (
@@ -2294,15 +2295,15 @@ function DropdownMenu({
             key={item.id}
             onClick={() => onSelect(item.id)}
             className={`flex w-full items-center gap-2 px-3 py-2 text-left transition-colors ${
-              item.active ? 'bg-[#1e1e1e]' : 'hover:bg-[#1a1a1a]'
+              item.active ? 'bg-elevated' : 'hover:bg-hover'
             }`}
           >
-            {item.icon && <span className="shrink-0 text-neutral-500">{item.icon}</span>}
-            <span className={`text-[13px] font-medium ${item.color ?? 'text-neutral-300'}`}>
+            {item.icon && <span className="shrink-0 text-muted">{item.icon}</span>}
+            <span className={`text-[13px] font-medium ${item.color ?? 'text-secondary'}`}>
               {item.label}
             </span>
             {item.sublabel && (
-              <span className="ml-auto text-[11px] text-neutral-600">{item.sublabel}</span>
+              <span className="ml-auto text-[11px] text-faint">{item.sublabel}</span>
             )}
           </button>
         ))}
@@ -2383,7 +2384,7 @@ function UserQuestionForm({
   });
 
   return (
-    <div className="overflow-hidden rounded-xl border border-blue-500/30 bg-[#141418]">
+    <div className="overflow-hidden rounded-xl border border-blue-500/30 bg-popover">
       {questions.map((q, qIdx) => {
         const multi = q.allowMultiple ?? false;
         const selected = selections[qIdx] ?? new Set<string>();
@@ -2391,9 +2392,9 @@ function UserQuestionForm({
         return (
           <div key={qIdx} className="px-5 py-4">
             {q.header && (
-              <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-neutral-600">{q.header}</p>
+              <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-faint">{q.header}</p>
             )}
-            <p className="mb-3 text-[14px] font-semibold text-neutral-200">{q.question}</p>
+            <p className="mb-3 text-[14px] font-semibold text-primary">{q.question}</p>
 
             {q.options && q.options.length > 0 ? (
               <div className="flex flex-col gap-1.5">
@@ -2404,14 +2405,14 @@ function UserQuestionForm({
                       key={oIdx}
                       onClick={() => toggle(qIdx, opt.label, multi)}
                       className={`flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
-                        isSelected ? 'bg-blue-500/15' : 'hover:bg-[#1a1a1e]'
+                        isSelected ? 'bg-blue-500/15' : 'hover:bg-hover'
                       }`}
                     >
                       {multi ? (
                         <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
                           isSelected
                             ? 'border-blue-500 bg-blue-500/70 text-white'
-                            : 'border-neutral-600 bg-transparent'
+                            : 'border-border-input bg-transparent'
                         }`}>
                           {isSelected && <Check className="h-3 w-3" />}
                         </div>
@@ -2421,11 +2422,11 @@ function UserQuestionForm({
                         </div>
                       )}
                       <div className="min-w-0 flex-1">
-                        <span className={`block text-[13px] font-medium ${isSelected ? 'text-neutral-200' : 'text-neutral-300'}`}>
+                        <span className={`block text-[13px] font-medium ${isSelected ? 'text-primary' : 'text-secondary'}`}>
                           {opt.label}
                         </span>
                         {opt.description && (
-                          <span className="block text-[12px] text-neutral-500">{opt.description}</span>
+                          <span className="block text-[12px] text-muted">{opt.description}</span>
                         )}
                       </div>
                     </button>
@@ -2436,7 +2437,7 @@ function UserQuestionForm({
               <input
                 type="text"
                 placeholder="Type your answer..."
-                className="w-full rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-2 text-[13px] text-neutral-300 placeholder-neutral-600 outline-none"
+                className="w-full rounded-lg border border-border-input bg-root px-3 py-2 text-[13px] text-secondary placeholder-placeholder outline-none"
                 onKeyDown={e => {
                   if (e.key === 'Enter') {
                     const val = (e.target as HTMLInputElement).value.trim();
@@ -2462,10 +2463,10 @@ function UserQuestionForm({
         ) : (
           <button
             onClick={onSkip}
-            className="flex items-center gap-2 rounded-lg bg-neutral-700/50 px-4 py-1.5 text-[12px] font-medium text-neutral-300 transition-colors hover:bg-neutral-700"
+            className="flex items-center gap-2 rounded-lg bg-elevated/50 px-4 py-1.5 text-[12px] font-medium text-secondary transition-colors hover:bg-hover"
           >
             Skip
-            <kbd className="flex items-center gap-0.5 rounded bg-neutral-600/40 px-1.5 py-0.5 text-[10px] font-medium text-neutral-400">&#x238C;</kbd>
+            <kbd className="flex items-center gap-0.5 rounded bg-elevated/40 px-1.5 py-0.5 text-[10px] font-medium text-tertiary">&#x238C;</kbd>
           </button>
         )}
       </div>
@@ -2499,22 +2500,22 @@ function PermissionDropdown({
   return (
     <div
       ref={ref}
-      className="absolute bottom-full left-0 z-30 mb-1 min-w-[260px] overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#141414] shadow-xl"
+      className="absolute bottom-full left-0 z-30 mb-1 min-w-[260px] overflow-hidden rounded-lg border border-border-input bg-popover shadow-xl"
     >
-      <div className="px-3 py-2 text-[11px] font-medium text-neutral-600">Permission Mode</div>
+      <div className="px-3 py-2 text-[11px] font-medium text-faint">Permission Mode</div>
       <div className="py-1">
         {PERMISSION_OPTIONS.map(opt => (
           <button
             key={opt.id}
             onClick={() => onSelect(opt.id)}
             className={`flex w-full flex-col gap-0.5 px-3 py-2.5 text-left transition-colors ${
-              opt.id === selectedId ? 'bg-blue-500/15' : 'hover:bg-[#1a1a1a]'
+              opt.id === selectedId ? 'bg-blue-500/15' : 'hover:bg-hover'
             }`}
           >
             <span className={`self-start rounded px-1.5 py-0.5 text-[12px] font-semibold ${opt.badgeBg} ${opt.badgeText}`}>
               {opt.label}
             </span>
-            <span className="text-[12px] text-neutral-500">{opt.description}</span>
+            <span className="text-[12px] text-muted">{opt.description}</span>
           </button>
         ))}
       </div>
@@ -2551,7 +2552,7 @@ function ContextMenuDropdown({ onClose, onOpenPanel }: { onClose: () => void; on
   return (
     <div
       ref={ref}
-      className="min-w-[220px] overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#141414] shadow-xl"
+      className="min-w-[220px] overflow-hidden rounded-lg border border-border-input bg-popover shadow-xl"
     >
       <div className="py-1">
         {CONTEXT_MENU_ITEMS.map(item => {
@@ -2560,12 +2561,12 @@ function ContextMenuDropdown({ onClose, onOpenPanel }: { onClose: () => void; on
             <button
               key={item.id}
               onClick={() => handleItem(item.id)}
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-[#1a1a1a]"
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-hover"
             >
-              <Icon className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
-              <span className="text-[13px] text-neutral-400">{item.label}</span>
+              <Icon className="h-3.5 w-3.5 shrink-0 text-muted" />
+              <span className="text-[13px] text-tertiary">{item.label}</span>
               {['files', 'branches', 'commits', 'changes', 'mcp'].includes(item.id) && (
-                <ChevronRight className="ml-auto h-3 w-3 text-neutral-700" />
+                <ChevronRight className="ml-auto h-3 w-3 text-faint" />
               )}
             </button>
           );
@@ -2638,26 +2639,26 @@ function ContextSubPanel({ panel, instanceId, sessionInfo, onAttach, onClose }: 
   return (
     <div
       ref={ref}
-      className="max-h-[360px] overflow-hidden rounded-lg border border-[#2a2a2a] bg-[#141414] shadow-xl"
+      className="max-h-[360px] overflow-hidden rounded-lg border border-border-input bg-popover shadow-xl"
     >
       {/* Header */}
-      <div className="flex items-center gap-2 border-b border-[#1e1e1e] px-3 py-2">
-        <button onClick={onClose} className="text-neutral-600 hover:text-neutral-400">
+      <div className="flex items-center gap-2 border-b border-border-default px-3 py-2">
+        <button onClick={onClose} className="text-faint hover:text-tertiary">
           <ChevronDown className="h-3.5 w-3.5" />
         </button>
-        <span className="text-[12px] font-medium text-neutral-400">{title}</span>
+        <span className="text-[12px] font-medium text-tertiary">{title}</span>
       </div>
 
       {/* Filter */}
       {showFilter && (
-        <div className="border-b border-[#1e1e1e] px-3 py-2">
+        <div className="border-b border-border-default px-3 py-2">
           <input
             type="text"
             placeholder={`Filter ${title.toLowerCase()}...`}
             value={filter}
             onChange={e => setFilter(e.target.value)}
             autoFocus
-            className="w-full bg-transparent text-[13px] text-neutral-300 placeholder-neutral-600 outline-none"
+            className="w-full bg-transparent text-[13px] text-secondary placeholder-placeholder outline-none"
           />
         </div>
       )}
@@ -2666,7 +2667,7 @@ function ContextSubPanel({ panel, instanceId, sessionInfo, onAttach, onClose }: 
       <div className="max-h-[260px] overflow-y-auto py-1">
         {loading ? (
           <div className="flex items-center justify-center py-6">
-            <Loader className="h-4 w-4 animate-spin text-neutral-600" />
+            <Loader className="h-4 w-4 animate-spin text-faint" />
           </div>
         ) : panel === 'files' ? (
           <FilesList data={data} filter={filter} onSelect={handleAttachFile} />
@@ -2698,23 +2699,23 @@ function ContextSubPanel({ panel, instanceId, sessionInfo, onAttach, onClose }: 
 
 function FilesList({ data, filter, onSelect }: { data: unknown; filter: string; onSelect: (path: string) => void }) {
   const d = data as { files: string[] } | null;
-  if (!d?.files) return <p className="py-4 text-center text-[12px] text-neutral-600">No files found</p>;
+  if (!d?.files) return <p className="py-4 text-center text-[12px] text-faint">No files found</p>;
   const filtered = filter ? d.files.filter(f => f.toLowerCase().includes(filter.toLowerCase())) : d.files;
-  if (filtered.length === 0) return <p className="py-4 text-center text-[12px] text-neutral-600">No matches</p>;
+  if (filtered.length === 0) return <p className="py-4 text-center text-[12px] text-faint">No matches</p>;
   return (
     <>
       {filtered.slice(0, 100).map(file => (
         <button
           key={file}
           onClick={() => onSelect(file)}
-          className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-[#1a1a1a]"
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-hover"
         >
-          <FileText className="h-3 w-3 shrink-0 text-neutral-600" />
-          <span className="truncate text-[12px] text-neutral-400">{file}</span>
+          <FileText className="h-3 w-3 shrink-0 text-faint" />
+          <span className="truncate text-[12px] text-tertiary">{file}</span>
         </button>
       ))}
       {filtered.length > 100 && (
-        <p className="px-3 py-1.5 text-[11px] text-neutral-600">...and {filtered.length - 100} more</p>
+        <p className="px-3 py-1.5 text-[11px] text-faint">...and {filtered.length - 100} more</p>
       )}
     </>
   );
@@ -2722,20 +2723,20 @@ function FilesList({ data, filter, onSelect }: { data: unknown; filter: string; 
 
 function BranchesList({ data, filter, onSelect }: { data: unknown; filter: string; onSelect: (name: string) => void }) {
   const d = data as { branches: { name: string; date: string; subject: string }[] } | null;
-  if (!d?.branches) return <p className="py-4 text-center text-[12px] text-neutral-600">No branches found</p>;
+  if (!d?.branches) return <p className="py-4 text-center text-[12px] text-faint">No branches found</p>;
   const filtered = filter ? d.branches.filter(b => b.name.toLowerCase().includes(filter.toLowerCase())) : d.branches;
-  if (filtered.length === 0) return <p className="py-4 text-center text-[12px] text-neutral-600">No matches</p>;
+  if (filtered.length === 0) return <p className="py-4 text-center text-[12px] text-faint">No matches</p>;
   return (
     <>
       {filtered.map(branch => (
         <button
           key={branch.name}
           onClick={() => onSelect(branch.name)}
-          className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-[#1a1a1a]"
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-hover"
         >
-          <GitBranchIcon className="h-3 w-3 shrink-0 text-neutral-600" />
-          <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-400">{branch.name}</span>
-          <span className="shrink-0 text-[11px] text-neutral-700">{branch.date}</span>
+          <GitBranchIcon className="h-3 w-3 shrink-0 text-faint" />
+          <span className="min-w-0 flex-1 truncate text-[12px] text-tertiary">{branch.name}</span>
+          <span className="shrink-0 text-[11px] text-faint">{branch.date}</span>
         </button>
       ))}
     </>
@@ -2744,23 +2745,23 @@ function BranchesList({ data, filter, onSelect }: { data: unknown; filter: strin
 
 function CommitsList({ data, filter, onSelect }: { data: unknown; filter: string; onSelect: (hash: string, subject: string) => void }) {
   const d = data as { commits: { hash: string; subject: string; date: string; author: string }[] } | null;
-  if (!d?.commits) return <p className="py-4 text-center text-[12px] text-neutral-600">No commits found</p>;
+  if (!d?.commits) return <p className="py-4 text-center text-[12px] text-faint">No commits found</p>;
   const filtered = filter ? d.commits.filter(c =>
     c.subject.toLowerCase().includes(filter.toLowerCase()) || c.hash.includes(filter)
   ) : d.commits;
-  if (filtered.length === 0) return <p className="py-4 text-center text-[12px] text-neutral-600">No matches</p>;
+  if (filtered.length === 0) return <p className="py-4 text-center text-[12px] text-faint">No matches</p>;
   return (
     <>
       {filtered.map(commit => (
         <button
           key={commit.hash}
           onClick={() => onSelect(commit.hash, commit.subject)}
-          className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-[#1a1a1a]"
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-hover"
         >
-          <GitCommit className="h-3 w-3 shrink-0 text-neutral-600" />
-          <span className="shrink-0 text-[12px] font-mono text-neutral-500">{commit.hash}</span>
-          <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-400">{commit.subject}</span>
-          <span className="shrink-0 text-[11px] text-neutral-700">{commit.date}</span>
+          <GitCommit className="h-3 w-3 shrink-0 text-faint" />
+          <span className="shrink-0 text-[12px] font-mono text-muted">{commit.hash}</span>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-tertiary">{commit.subject}</span>
+          <span className="shrink-0 text-[11px] text-faint">{commit.date}</span>
         </button>
       ))}
     </>
@@ -2770,14 +2771,14 @@ function CommitsList({ data, filter, onSelect }: { data: unknown; filter: string
 function ChangesList({ data, onAttach }: { data: unknown; onAttach: () => void }) {
   const d = data as { files: { status: string; path: string }[]; diffSummary: string } | null;
   if (!d?.files || d.files.length === 0) {
-    return <p className="py-4 text-center text-[12px] text-neutral-600">No local changes</p>;
+    return <p className="py-4 text-center text-[12px] text-faint">No local changes</p>;
   }
 
   const statusColor = (s: string) => {
     if (s === 'M') return 'text-yellow-500';
     if (s === 'A' || s === '??' || s === '??') return 'text-emerald-300';
     if (s === 'D') return 'text-rose-300/70';
-    return 'text-neutral-500';
+    return 'text-muted';
   };
 
   return (
@@ -2785,10 +2786,10 @@ function ChangesList({ data, onAttach }: { data: unknown; onAttach: () => void }
       {d.files.map((file, i) => (
         <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
           <span className={`shrink-0 font-mono ${statusColor(file.status)}`}>{file.status}</span>
-          <span className="truncate text-neutral-400">{file.path}</span>
+          <span className="truncate text-tertiary">{file.path}</span>
         </div>
       ))}
-      <div className="border-t border-[#1e1e1e] px-3 py-2">
+      <div className="border-t border-border-default px-3 py-2">
         <button
           onClick={onAttach}
           className="w-full rounded-lg bg-blue-500/60 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-blue-500/80"
@@ -2805,14 +2806,14 @@ function ChangesList({ data, onAttach }: { data: unknown; onAttach: () => void }
 function McpServersList({ sessionInfo }: { sessionInfo?: SessionInfo | null }) {
   const servers = sessionInfo?.mcpServers ?? [];
   if (servers.length === 0) {
-    return <p className="py-4 text-center text-[12px] text-neutral-600">No MCP servers connected</p>;
+    return <p className="py-4 text-center text-[12px] text-faint">No MCP servers connected</p>;
   }
   return (
     <>
       {servers.map((server, i) => (
         <div key={i} className="flex items-center gap-2 px-3 py-2 text-[12px]">
-          <Server className="h-3 w-3 shrink-0 text-neutral-600" />
-          <span className="flex-1 text-neutral-400">{server.name}</span>
+          <Server className="h-3 w-3 shrink-0 text-faint" />
+          <span className="flex-1 text-tertiary">{server.name}</span>
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
             server.status === 'connected'
               ? 'bg-green-900/30 text-emerald-300'
@@ -2830,7 +2831,7 @@ function McpServersList({ sessionInfo }: { sessionInfo?: SessionInfo | null }) {
 
 function TextBlock({ text }: { text: string }) {
   return (
-    <div className="prose-custom text-[14px] leading-relaxed text-neutral-300">
+    <div className="prose-custom text-[14px] leading-relaxed text-secondary">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -2838,24 +2839,24 @@ function TextBlock({ text }: { text: string }) {
             const match = /language-(\w+)/.exec(className ?? '');
             const codeString = String(children).replace(/\n$/, '');
             if (match) return <CodeBlock language={match[1]} code={codeString} />;
-            return <code className="rounded bg-[#1e1e1e] px-1.5 py-0.5 text-[13px] text-neutral-400" {...props}>{children}</code>;
+            return <code className="rounded bg-elevated px-1.5 py-0.5 text-[13px] text-tertiary" {...props}>{children}</code>;
           },
           pre({ children }) { return <>{children}</>; },
           p({ children }) { return <p className="mb-3 last:mb-0">{children}</p>; },
-          ul({ children }) { return <ul className="mb-3 ml-4 list-disc space-y-1 text-neutral-300">{children}</ul>; },
-          ol({ children }) { return <ol className="mb-3 ml-4 list-decimal space-y-1 text-neutral-300">{children}</ol>; },
-          li({ children }) { return <li className="text-neutral-300">{children}</li>; },
-          h1({ children }) { return <h1 className="mb-3 mt-5 text-[18px] font-semibold text-neutral-200">{children}</h1>; },
-          h2({ children }) { return <h2 className="mb-2 mt-4 text-[16px] font-semibold text-neutral-200">{children}</h2>; },
-          h3({ children }) { return <h3 className="mb-2 mt-3 text-[15px] font-semibold text-neutral-200">{children}</h3>; },
+          ul({ children }) { return <ul className="mb-3 ml-4 list-disc space-y-1 text-secondary">{children}</ul>; },
+          ol({ children }) { return <ol className="mb-3 ml-4 list-decimal space-y-1 text-secondary">{children}</ol>; },
+          li({ children }) { return <li className="text-secondary">{children}</li>; },
+          h1({ children }) { return <h1 className="mb-3 mt-5 text-[18px] font-semibold text-primary">{children}</h1>; },
+          h2({ children }) { return <h2 className="mb-2 mt-4 text-[16px] font-semibold text-primary">{children}</h2>; },
+          h3({ children }) { return <h3 className="mb-2 mt-3 text-[15px] font-semibold text-primary">{children}</h3>; },
           a({ href, children }) { return <a href={href} className="text-blue-300 underline decoration-blue-400/30 hover:decoration-blue-400" target="_blank" rel="noopener noreferrer">{children}</a>; },
-          blockquote({ children }) { return <blockquote className="mb-3 border-l-2 border-neutral-700 pl-3 text-neutral-400">{children}</blockquote>; },
+          blockquote({ children }) { return <blockquote className="mb-3 border-l-2 border-border-default pl-3 text-tertiary">{children}</blockquote>; },
           table({ children }) { return <div className="mb-3 overflow-x-auto"><table className="w-full border-collapse text-[13px]">{children}</table></div>; },
-          th({ children }) { return <th className="border border-[#2a2a2a] bg-[#1a1a1a] px-3 py-1.5 text-left text-neutral-300">{children}</th>; },
-          td({ children }) { return <td className="border border-[#2a2a2a] px-3 py-1.5 text-neutral-400">{children}</td>; },
-          hr() { return <hr className="my-4 border-[#1e1e1e]" />; },
-          strong({ children }) { return <strong className="font-semibold text-neutral-200">{children}</strong>; },
-          em({ children }) { return <em className="text-neutral-400">{children}</em>; },
+          th({ children }) { return <th className="border border-border-input bg-hover px-3 py-1.5 text-left text-secondary">{children}</th>; },
+          td({ children }) { return <td className="border border-border-input px-3 py-1.5 text-tertiary">{children}</td>; },
+          hr() { return <hr className="my-4 border-border-default" />; },
+          strong({ children }) { return <strong className="font-semibold text-primary">{children}</strong>; },
+          em({ children }) { return <em className="text-tertiary">{children}</em>; },
         }}
       >
         {text}
@@ -2868,18 +2869,19 @@ function TextBlock({ text }: { text: string }) {
 
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const { theme } = useTheme();
   const handleCopy = () => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); };
 
   return (
-    <div className="group relative my-2 overflow-hidden rounded-lg border border-[#1e1e1e]">
-      <div className="flex items-center justify-between bg-[#1a1a1a] px-3 py-1.5">
-        <span className="text-[11px] text-neutral-500">{language}</span>
-        <button onClick={handleCopy} className="flex items-center gap-1 text-[11px] text-neutral-600 transition-colors hover:text-neutral-400">
+    <div className="group relative my-2 overflow-hidden rounded-lg border border-border-default">
+      <div className="flex items-center justify-between bg-hover px-3 py-1.5">
+        <span className="text-[11px] text-muted">{language}</span>
+        <button onClick={handleCopy} className="flex items-center gap-1 text-[11px] text-faint transition-colors hover:text-tertiary">
           {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <SyntaxHighlighter style={oneDark} language={language} customStyle={{ margin: 0, padding: '12px', background: '#0a0a0a', fontSize: '13px', borderRadius: 0 }}>
+      <SyntaxHighlighter style={theme === 'dark' ? oneDark : oneLight} language={language} customStyle={{ margin: 0, padding: '12px', background: 'var(--bg-codeblock)', fontSize: '13px', borderRadius: 0 }}>
         {code}
       </SyntaxHighlighter>
     </div>
