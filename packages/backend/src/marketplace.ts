@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync, rmSync, renameSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -7,9 +7,11 @@ import yaml from 'js-yaml';
 // --- Types ---
 
 interface MarketplaceSource {
-  source: 'github' | 'directory';
+  source: 'github' | 'directory' | 'url';
   repo?: string;
   path?: string;
+  url?: string;
+  ref?: string;
 }
 
 interface MarketplaceEntry {
@@ -17,6 +19,33 @@ interface MarketplaceEntry {
   installLocation: string;
   lastUpdated: string;
   autoUpdate?: boolean;
+}
+
+/** marketplace.json schema from .claude-plugin/marketplace.json */
+interface MarketplaceJson {
+  name: string;
+  owner?: { name: string; email?: string };
+  metadata?: { description?: string; version?: string; pluginRoot?: string };
+  plugins: MarketplacePluginEntry[];
+}
+
+interface MarketplacePluginEntry {
+  name: string;
+  source: string | { source: string; repo?: string; url?: string; path?: string; ref?: string; sha?: string };
+  description?: string;
+  version?: string;
+  author?: { name: string; email?: string } | string;
+  keywords?: string[];
+  category?: string;
+  tags?: string[];
+}
+
+export interface MarketplaceInfo {
+  name: string;
+  source: MarketplaceSource;
+  pluginCount: number;
+  lastUpdated: string;
+  autoUpdate: boolean;
 }
 
 interface PluginJson {
@@ -117,6 +146,190 @@ export class MarketplaceService {
     }
   }
 
+  listMarketplaces(): MarketplaceInfo[] {
+    const marketplaces = this.getMarketplaces();
+    return Object.entries(marketplaces).map(([name, entry]) => {
+      let pluginCount = 0;
+      const pluginsDir = join(entry.installLocation, 'plugins');
+      if (existsSync(pluginsDir)) {
+        pluginCount = this.findAllPluginDirs(pluginsDir).length;
+      }
+      return { name, source: entry.source, pluginCount, lastUpdated: entry.lastUpdated, autoUpdate: entry.autoUpdate ?? false };
+    });
+  }
+
+  /**
+   * Add a marketplace by git repo reference.
+   * Accepts: "owner/repo", "https://github.com/owner/repo", or full git URL.
+   * Clones the repo and registers it in known_marketplaces.json.
+   */
+  addMarketplace(repoRef: string, autoUpdate = true): { name: string; pluginCount: number } {
+    const { gitUrl, source } = this.parseRepoRef(repoRef);
+
+    // Clone to marketplaces directory
+    const marketplacesDir = join(this.claudeDir, 'plugins', 'marketplaces');
+    mkdirSync(marketplacesDir, { recursive: true });
+
+    // Determine marketplace name from marketplace.json after clone, or use repo name
+    const tempName = source.repo?.split('/').pop() ?? repoRef.split('/').pop()?.replace(/\.git$/, '') ?? 'marketplace';
+    const clonePath = join(marketplacesDir, tempName);
+
+    // Check if already cloned
+    if (existsSync(clonePath)) {
+      // Pull latest
+      try {
+        execSync('git pull --rebase', { cwd: clonePath, encoding: 'utf-8', timeout: 30_000 });
+        console.log(`[marketplace] Updated existing clone at ${clonePath}`);
+      } catch (err) {
+        console.log(`[marketplace] Failed to pull ${clonePath}:`, err);
+      }
+    } else {
+      // Clone
+      try {
+        const refArgs = source.ref ? `--branch ${source.ref}` : '';
+        execSync(`git clone --depth 1 ${refArgs} ${gitUrl} ${clonePath}`, {
+          encoding: 'utf-8',
+          timeout: 60_000,
+        });
+        console.log(`[marketplace] Cloned ${gitUrl} to ${clonePath}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`Failed to clone ${gitUrl}: ${message}`);
+      }
+    }
+
+    // Parse marketplace.json to get the actual name
+    const marketplaceJsonPath = join(clonePath, '.claude-plugin', 'marketplace.json');
+    let marketplaceName = tempName;
+    let pluginCount = 0;
+
+    if (existsSync(marketplaceJsonPath)) {
+      try {
+        const mJson = JSON.parse(readFileSync(marketplaceJsonPath, 'utf-8')) as MarketplaceJson;
+        marketplaceName = mJson.name ?? tempName;
+        pluginCount = mJson.plugins?.length ?? 0;
+      } catch (err) {
+        console.log('[marketplace] Failed to parse marketplace.json:', err);
+      }
+    }
+
+    // If marketplace name differs from directory name, check for conflict
+    const finalPath = marketplaceName !== tempName
+      ? join(marketplacesDir, marketplaceName)
+      : clonePath;
+
+    if (finalPath !== clonePath) {
+      if (existsSync(finalPath)) {
+        // Remove the temp clone, use existing
+        rmSync(clonePath, { recursive: true, force: true });
+      } else {
+        // Rename
+        renameSync(clonePath, finalPath);
+      }
+    }
+
+    // Count plugins from filesystem too (marketplace.json might not list all)
+    const pluginsDir = join(finalPath, 'plugins');
+    if (existsSync(pluginsDir)) {
+      const fsDirs = this.findAllPluginDirs(pluginsDir);
+      pluginCount = Math.max(pluginCount, fsDirs.length);
+    }
+
+    // Register in known_marketplaces.json
+    const marketplaces = this.getMarketplaces();
+    marketplaces[marketplaceName] = {
+      source,
+      installLocation: finalPath,
+      lastUpdated: new Date().toISOString(),
+      autoUpdate,
+    };
+    this.writeMarketplacesFile(marketplaces);
+    this.invalidateCache();
+
+    console.log(`[marketplace] Added marketplace: ${marketplaceName} (${pluginCount} plugins)`);
+    return { name: marketplaceName, pluginCount };
+  }
+
+  removeMarketplace(name: string, deleteFiles = false): void {
+    const marketplaces = this.getMarketplaces();
+    const entry = marketplaces[name];
+    if (!entry) {
+      throw new Error(`Marketplace "${name}" not found`);
+    }
+
+    // Uninstall all plugins from this marketplace
+    const settings = this.readSettings();
+    if (settings.enabledPlugins) {
+      const keysToRemove = Object.keys(settings.enabledPlugins)
+        .filter(k => k.endsWith(`@${name}`));
+      for (const key of keysToRemove) {
+        delete settings.enabledPlugins[key];
+      }
+      this.writeSettings(settings);
+    }
+
+    // Optionally delete cloned files
+    if (deleteFiles && entry.installLocation && existsSync(entry.installLocation)) {
+      rmSync(entry.installLocation, { recursive: true, force: true });
+      console.log(`[marketplace] Deleted marketplace files at ${entry.installLocation}`);
+    }
+
+    // Remove from known_marketplaces.json
+    delete marketplaces[name];
+    this.writeMarketplacesFile(marketplaces);
+    this.invalidateCache();
+
+    console.log(`[marketplace] Removed marketplace: ${name}`);
+  }
+
+  setAutoUpdate(name: string, autoUpdate: boolean): void {
+    const marketplaces = this.getMarketplaces();
+    const entry = marketplaces[name];
+    if (!entry) {
+      throw new Error(`Marketplace "${name}" not found`);
+    }
+    entry.autoUpdate = autoUpdate;
+    this.writeMarketplacesFile(marketplaces);
+    console.log(`[marketplace] Set autoUpdate=${autoUpdate} for ${name}`);
+  }
+
+  private parseRepoRef(repoRef: string): { gitUrl: string; source: MarketplaceSource } {
+    const trimmed = repoRef.trim();
+
+    // Full git URL (https:// or git@)
+    if (trimmed.startsWith('https://') || trimmed.startsWith('git@') || trimmed.startsWith('http://')) {
+      return {
+        gitUrl: trimmed,
+        source: { source: 'url', url: trimmed },
+      };
+    }
+
+    // owner/repo shorthand → GitHub
+    if (/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(trimmed)) {
+      return {
+        gitUrl: `https://github.com/${trimmed}.git`,
+        source: { source: 'github', repo: trimmed },
+      };
+    }
+
+    // owner/repo@ref
+    const refMatch = trimmed.match(/^([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)@(.+)$/);
+    if (refMatch) {
+      return {
+        gitUrl: `https://github.com/${refMatch[1]}.git`,
+        source: { source: 'github', repo: refMatch[1], ref: refMatch[2] },
+      };
+    }
+
+    throw new Error(`Invalid marketplace reference: "${trimmed}". Use owner/repo or a full git URL.`);
+  }
+
+  private writeMarketplacesFile(data: Record<string, MarketplaceEntry>): void {
+    const dir = join(this.claudeDir, 'plugins');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(this.knownMarketplacesPath, JSON.stringify(data, null, 2) + '\n', 'utf-8');
+  }
+
   getPlugins(marketplace?: string, search?: string): PluginMetadata[] {
     let plugins = this.getAllPluginsCached();
 
@@ -209,18 +422,31 @@ export class MarketplaceService {
     return Object.keys(settings.enabledPlugins).filter(k => settings.enabledPlugins[k]);
   }
 
+  /**
+   * Refresh marketplace repos by pulling latest changes.
+   * If a specific marketplace name is given, refreshes only that one (regardless of autoUpdate).
+   * If no name is given, refreshes all git-based marketplaces that have autoUpdate enabled.
+   */
   async refresh(marketplace?: string): Promise<void> {
     const marketplaces = this.getMarketplaces();
+    let updated = false;
 
     for (const [name, entry] of Object.entries(marketplaces)) {
       if (marketplace && name !== marketplace) continue;
-      if (entry.source.source === 'github' && existsSync(entry.installLocation)) {
+
+      // When refreshing all, only pull repos with autoUpdate enabled
+      if (!marketplace && !entry.autoUpdate) continue;
+
+      const isGit = entry.source.source === 'github' || entry.source.source === 'url';
+      if (isGit && existsSync(entry.installLocation)) {
         try {
           execSync('git pull --rebase', {
             cwd: entry.installLocation,
             encoding: 'utf-8',
-            timeout: 15_000,
+            timeout: 30_000,
           });
+          entry.lastUpdated = new Date().toISOString();
+          updated = true;
           console.log(`[marketplace] Refreshed ${name}`);
         } catch (err) {
           console.log(`[marketplace] Failed to refresh ${name}:`, err);
@@ -228,6 +454,9 @@ export class MarketplaceService {
       }
     }
 
+    if (updated) {
+      this.writeMarketplacesFile(marketplaces);
+    }
     this.invalidateCache();
   }
 

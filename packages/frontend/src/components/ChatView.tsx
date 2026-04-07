@@ -92,6 +92,7 @@ interface ChatViewProps {
   initialPermissionMode?: string | null;
   draft?: string;
   onDraftChange?: (value: string) => void;
+  rateLimitInfo?: { status: string; resetsAt?: number; rateLimitType?: string } | null;
 }
 
 /** Map a full model ID (e.g. "claude-sonnet-4-6") back to our short key */
@@ -102,7 +103,7 @@ function modelIdToKey(modelId: string | null | undefined): string {
   return 'opus';
 }
 
-export default function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, initialPermissionMode, draft, onDraftChange }: ChatViewProps) {
+export default function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, initialPermissionMode, draft, onDraftChange, rateLimitInfo }: ChatViewProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingBlocks, setStreamingBlocks] = useState<ContentBlock[]>([]);
   const [localInput, setLocalInput] = useState('');
@@ -122,8 +123,9 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   const [effortOpen, setEffortOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
 
-  // Permission request (ask mode)
-  const [pendingPermission, setPendingPermission] = useState<{ toolName: string; toolInput: unknown; toolUseId: string } | null>(null);
+  // Permission request queue (ask mode) — supports multiple concurrent requests
+  const [permissionQueue, setPermissionQueue] = useState<Array<{ toolName: string; toolInput: unknown; toolUseId: string }>>([]);
+  const pendingPermission = permissionQueue[0] ?? null;
 
   // User question (AskUserQuestion tool)
   const [pendingQuestion, setPendingQuestion] = useState<{
@@ -148,6 +150,33 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
 
   // Tool progress (real-time: "Running bash for 12s...")
   const [toolProgress, setToolProgress] = useState<{ toolName: string; elapsedSeconds: number } | null>(null);
+
+  // Processing phase: tracks what Claude is currently doing
+  const [processingPhase, setProcessingPhase] = useState<'connecting' | 'thinking' | 'working' | 'streaming' | null>(null);
+
+  // P0-C: Staleness timer — if no streaming activity for 30s while "sending", reset
+  const stalenessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetStalenessTimer = useCallback(() => {
+    if (stalenessTimerRef.current) clearTimeout(stalenessTimerRef.current);
+    stalenessTimerRef.current = setTimeout(() => {
+      setSending(false);
+      setProcessingPhase(null);
+      setToolProgress(null);
+    }, 30_000);
+  }, []);
+  const clearStalenessTimer = useCallback(() => {
+    if (stalenessTimerRef.current) {
+      clearTimeout(stalenessTimerRef.current);
+      stalenessTimerRef.current = null;
+    }
+  }, []);
+
+  // Whether the last turn was interrupted
+  const [wasInterrupted, setWasInterrupted] = useState(false);
+
+  // Last error message (for retry UX)
+  const [lastError, setLastError] = useState<string | null>(null);
+  const lastPromptRef = useRef<string | null>(null);
 
   // Context usage (token budget)
   const [contextUsage, setContextUsage] = useState<{ usedTokens: number; maxTokens: number } | null>(null);
@@ -208,29 +237,38 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       .catch(() => {});
   }, [instanceId]);
 
+  // Helper: reset all streaming state (used on message complete, error, disconnect)
+  const resetStreamingState = useCallback(() => {
+    setStreamingBlocks([]);
+    setStreamingText('');
+    deltaBufferRef.current = '';
+    setThinkingText('');
+    thinkingBufferRef.current = '';
+    setToolProgress(null);
+    setProcessingPhase(null);
+    clearStalenessTimer();
+  }, [clearStalenessTimer]);
+
   // Listen for real-time events
   useEffect(() => {
     const onMessage = ({ instanceId: id, message }: { instanceId: string; message: ChatMessage }) => {
       if (id !== instanceId) return;
       setMessages(prev => [...prev, message]);
-      setStreamingBlocks([]);
-      // Clear streaming text when full message arrives (prevents duplication)
-      setStreamingText('');
-      deltaBufferRef.current = '';
-      setThinkingText('');
-      thinkingBufferRef.current = '';
-      setToolProgress(null);
+      resetStreamingState();
     };
 
     const onContentBlock = ({ instanceId: id, block }: { instanceId: string; block: ContentBlock }) => {
       if (id !== instanceId) return;
       setStreamingBlocks(prev => [...prev, block]);
+      if (block.type === 'tool_use') setProcessingPhase('working');
+      resetStalenessTimer(); // P0-C: activity detected
     };
 
     const onStatus = ({ instanceId: id, status: newStatus }: { instanceId: string; status: string }) => {
       if (id !== instanceId) return;
       if (newStatus === 'waiting_input') {
         setSending(false);
+        clearStalenessTimer();
       }
     };
 
@@ -254,10 +292,18 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       }
     };
 
-    const onResult = ({ instanceId: id, costUsd, durationMs }: { instanceId: string; costUsd: number; durationMs: number }) => {
+    const onResult = ({ instanceId: id, costUsd, durationMs, stopReason }: { instanceId: string; costUsd: number; durationMs: number; stopReason?: string }) => {
       if (id !== instanceId) return;
       setSending(false);
       setToolProgress(null);
+      setProcessingPhase(null);
+      setLastError(null); // Clear any previous error on success
+      clearStalenessTimer(); // P0-C: turn complete
+      if (stopReason === 'interrupted') {
+        setWasInterrupted(true);
+      } else {
+        setWasInterrupted(false);
+      }
       // Fetch context usage after each turn
       fetch(`/api/instances/${instanceId}/context-usage`)
         .then(r => r.ok ? r.json() : null)
@@ -275,6 +321,21 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       }));
     };
 
+    // P0-E: Error handler — reset streaming state and unlock input
+    const onError = ({ instanceId: id, error }: { instanceId: string; error: string }) => {
+      if (id !== instanceId) return;
+      setSending(false);
+      resetStreamingState();
+      setLastError(error);
+    };
+
+    // P0-C: Instance exited — ensure sending is unlocked
+    const onExited = ({ instanceId: id }: { instanceId: string; exitCode: number }) => {
+      if (id !== instanceId) return;
+      setSending(false);
+      resetStreamingState();
+    };
+
     // Join instance room for scoped events
     socket.emit('instance:join', { instanceId });
 
@@ -284,7 +345,12 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       if (id !== instanceId) return;
       // Skip if this tool was already approved in this session
       if (approvedToolsRef.current.has(toolName)) return;
-      setPendingPermission({ toolName, toolInput, toolUseId });
+      setPermissionQueue(prev => {
+        // Avoid duplicates by toolUseId
+        if (prev.some(p => p.toolUseId === toolUseId)) return prev;
+        return [...prev, { toolName, toolInput, toolUseId }];
+      });
+      clearStalenessTimer(); // Waiting on user — don't timeout
     };
 
     const onUserQuestion = ({ instanceId: id, toolUseId, questions }: {
@@ -293,6 +359,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     }) => {
       if (id !== instanceId) return;
       setPendingQuestion({ toolUseId, questions });
+      clearStalenessTimer(); // Waiting on user — don't timeout
     };
 
     // RAF-throttled stream delta handler for real-time text streaming
@@ -300,6 +367,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       instanceId: string; text?: string; thinking?: string; type?: string; blockType?: string;
     }) => {
       if (id !== instanceId) return;
+      resetStalenessTimer(); // P0-C: activity detected
       if (text) {
         deltaBufferRef.current += text;
         if (!flushTimerRef.current) {
@@ -310,6 +378,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             setStreamingText(prev => prev + buffered);
           });
         }
+        setProcessingPhase('streaming');
       }
       if (thinking) {
         thinkingBufferRef.current += thinking;
@@ -321,6 +390,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             setThinkingText(prev => prev + buffered);
           });
         }
+        setProcessingPhase(prev => prev !== 'streaming' ? 'thinking' : prev);
       }
       if (type === 'start') {
         if (blockType === 'thinking') {
@@ -339,6 +409,33 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     }) => {
       if (id !== instanceId) return;
       setToolProgress({ toolName, elapsedSeconds });
+      resetStalenessTimer(); // P0-C: activity detected
+    };
+
+    // P0-A + P0-C: Reconnection recovery — re-fetch messages + status
+    const onConnect = () => {
+      socket.emit('instance:join', { instanceId });
+      // Re-fetch authoritative state after reconnect
+      fetch(`/api/instances/${instanceId}/messages`)
+        .then(r => r.ok ? r.json() as Promise<ChatMessage[]> : null)
+        .then(msgs => { if (msgs) setMessages(msgs); })
+        .catch(() => {});
+      // Check if still processing — reset sending flag if not
+      fetch(`/api/instances`)
+        .then(r => r.ok ? r.json() as Promise<Array<{ id: string; status: string }>> : null)
+        .then(all => {
+          const inst = all?.find(i => i.id === instanceId);
+          if (inst && inst.status !== 'processing') {
+            setSending(false);
+            resetStreamingState();
+          }
+        })
+        .catch(() => {});
+    };
+
+    // P0-C: Socket disconnect — clear staleness timer (reconnect handler will recover)
+    const onDisconnect = () => {
+      clearStalenessTimer();
     };
 
     socket.on('chat:message', onMessage);
@@ -348,19 +445,12 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     socket.on('instance:status', onStatus);
     socket.on('chat:session', onSession);
     socket.on('chat:result', onResult);
+    socket.on('chat:error', onError);
+    socket.on('instance:exited', onExited);
     socket.on('chat:permission_request', onPermissionRequest);
     socket.on('chat:user_question', onUserQuestion);
-
-    socket.emit('chat:history', { instanceId });
-    const onHistory = ({ instanceId: id, messages: msgs }: { instanceId: string; messages: ChatMessage[] }) => {
-      if (id !== instanceId) return;
-      if (msgs.length > 0) setMessages(msgs);
-    };
-    socket.on('chat:history', onHistory);
-
-    // Re-join room on reconnect
-    const onConnect = () => socket.emit('instance:join', { instanceId });
     socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
 
     return () => {
       socket.emit('instance:leave', { instanceId });
@@ -371,10 +461,13 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       socket.off('instance:status', onStatus);
       socket.off('chat:session', onSession);
       socket.off('chat:result', onResult);
+      socket.off('chat:error', onError);
+      socket.off('instance:exited', onExited);
       socket.off('chat:permission_request', onPermissionRequest);
       socket.off('chat:user_question', onUserQuestion);
-      socket.off('chat:history', onHistory);
       socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
+      clearStalenessTimer();
       // Cancel any pending RAF
       if (flushTimerRef.current) {
         cancelAnimationFrame(flushTimerRef.current);
@@ -385,30 +478,28 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
         thinkingFlushRef.current = null;
       }
     };
-  }, [instanceId, socket]);
+  }, [instanceId, socket, resetStreamingState, resetStalenessTimer, clearStalenessTimer]);
 
-  // Smart auto-scroll — only scroll when user is near the bottom
-  const userScrolledUpRef = useRef(false);
+  // Smart auto-scroll via IntersectionObserver on the sentinel element.
+  // If the sentinel (messagesEndRef) is visible, the user is at the bottom — auto-scroll.
+  // If the user scrolled up so the sentinel is out of view, don't fight them.
+  const isAtBottomRef = useRef(true);
 
-  // Track if user manually scrolled up
   useEffect(() => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-    const onScroll = () => {
-      const distFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-      userScrolledUpRef.current = distFromBottom > 150;
-    };
-    container.addEventListener('scroll', onScroll, { passive: true });
-    return () => container.removeEventListener('scroll', onScroll);
+    const sentinel = messagesEndRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { isAtBottomRef.current = entry.isIntersecting; },
+      { root: scrollContainerRef.current, threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
   }, []);
 
   // Auto-scroll on new content
   useEffect(() => {
-    if (userScrolledUpRef.current) return;
-    const container = scrollContainerRef.current;
-    if (container) {
-      container.scrollTop = container.scrollHeight;
-    }
+    if (!isAtBottomRef.current) return;
+    messagesEndRef.current?.scrollIntoView({ block: 'end' });
   }, [messages, streamingBlocks, streamingText]);
 
   // Add a system message locally
@@ -424,53 +515,40 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   // Track tools already approved this session to prevent duplicate prompts
   const approvedToolsRef = useRef(new Set<string>());
 
-  // Approve a tool with optional persistence scope, then re-send
+  // Approve a tool — resolve the pending canUseTool callback via socket (zero tokens).
+  // scope='session' → approve_tool (always-allow this tool for the instance)
+  // scope='project' → also persist via allow-tool REST endpoint
   const approveToolPersist = useCallback(async (toolName: string, scope: 'session' | 'project') => {
+    const permission = permissionQueue[0];
     approvedToolsRef.current.add(toolName);
-    setPendingPermission(null);
+    setPermissionQueue(prev => prev.slice(1)); // Dequeue front item
 
-    try {
-      // First: persist the approval and wait for it to complete
-      const allowRes = await fetch(`/api/instances/${instanceId}/allow-tool`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ toolName, scope }),
-      });
-      if (!allowRes.ok) {
-        console.error(`[ChatView] allow-tool failed: ${allowRes.status}`);
+    if (scope === 'project') {
+      // Persist approval to project settings + resolve pending callback
+      try {
+        await fetch(`/api/instances/${instanceId}/allow-tool`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ toolName, scope }),
+        });
+      } catch (err) {
+        console.error('[ChatView] allow-tool request failed:', err);
       }
-    } catch (err) {
-      console.error('[ChatView] allow-tool request failed:', err);
-    }
-
-    // Then: re-send with a simple "continue" — hidden flag prevents duplicate user bubble
-    setSending(true);
-    try {
-      const msgRes = await fetch(`/api/instances/${instanceId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: `I have approved the ${toolName} tool. Please continue with what you were doing.`,
-          model: modelIdMap[selectedModel],
-          permissionMode,
-          effort: effortLevel,
-          hidden: true,
-        }),
-      });
-      if (!msgRes.ok) {
-        console.error(`[ChatView] send message after approval failed: ${msgRes.status}`);
-        setSending(false);
+      // approve_tool also resolves the pending permission if it matches
+      socket.emit('chat:approve_tool', { instanceId, toolName });
+    } else {
+      // Session-only: resolve this specific tool call via socket
+      if (permission) {
+        socket.emit('chat:resolve_permission', {
+          instanceId,
+          toolUseId: permission.toolUseId,
+          allow: true,
+        });
+      } else {
+        socket.emit('chat:approve_tool', { instanceId, toolName });
       }
-    } catch (err) {
-      console.error('[ChatView] send message after approval failed:', err);
-      setSending(false);
     }
-  }, [instanceId, selectedModel, permissionMode, effortLevel]);
-
-  // Dismiss permission prompt without approving
-  const dismissPermission = useCallback(() => {
-    setPendingPermission(null);
-  }, []);
+  }, [instanceId, socket, permissionQueue]);
 
   // Remove a context item
   const removeContext = useCallback((index: number) => {
@@ -492,6 +570,8 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   const sendDirect = useCallback(async (text: string, force = false) => {
     if ((!force && sending) || status === 'exited') return;
     setSending(true);
+    setLastError(null);
+    resetStalenessTimer();
     try {
       await fetch(`/api/instances/${instanceId}/messages`, {
         method: 'POST',
@@ -507,14 +587,17 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       setContextItems([]);
     } catch {
       setSending(false);
+      clearStalenessTimer();
     }
-  }, [sending, status, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload]);
+  }, [sending, status, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload, resetStalenessTimer, clearStalenessTimer]);
 
   // Interrupt current generation
   const handleInterrupt = useCallback(async () => {
     try {
       await fetch(`/api/instances/${instanceId}/interrupt`, { method: 'POST' });
       setSending(false);
+      setProcessingPhase(null);
+      setWasInterrupted(true);
     } catch { /* ignore */ }
   }, [instanceId]);
 
@@ -575,12 +658,19 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     return () => { if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current); };
   }, [mentionQuery, mentionActive, instanceId]);
 
-  // Submit answer to a user question — sends as the next message
+  // Submit answer to a user question — resolve via socket (zero extra tokens)
   const submitQuestionAnswer = useCallback((answers: string[]) => {
     const answerText = answers.join(', ');
+    const question = pendingQuestion;
     setPendingQuestion(null);
-    sendDirect(answerText, true);
-  }, [sendDirect]);
+    if (question) {
+      socket.emit('chat:resolve_question', {
+        instanceId,
+        toolUseId: question.toolUseId,
+        answer: answerText,
+      });
+    }
+  }, [socket, instanceId, pendingQuestion]);
 
   // Expose sendMessage to parent via ref
   useEffect(() => {
@@ -610,6 +700,8 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     const prompt = input.trim();
     if (!prompt) return;
     setInput('');
+    setLastError(null);
+    lastPromptRef.current = prompt;
 
     // /clear resets the session server-side and clears local state
     if (prompt === '/clear' || prompt === '/reset') {
@@ -630,6 +722,9 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     }
 
     setSending(true);
+    setProcessingPhase('connecting');
+    setWasInterrupted(false);
+    resetStalenessTimer(); // P0-C: start watchdog
     try {
       await fetch(`/api/instances/${instanceId}/messages`, {
         method: 'POST',
@@ -645,8 +740,9 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       setContextItems([]);
     } catch {
       setSending(false);
+      clearStalenessTimer();
     }
-  }, [input, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload, isProcessing, handleInterrupt]);
+  }, [input, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload, isProcessing, handleInterrupt, resetStalenessTimer, clearStalenessTimer]);
 
   // Autocomplete from server-provided slash commands
   const [acIndex, setAcIndex] = useState(0);
@@ -773,7 +869,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
 
         <div className="mx-auto max-w-3xl space-y-5">
           {messages.map((msg, i) => (
-            <MessageBubble key={i} message={msg} />
+            <MessageBubble key={`${msg.role}-${msg.timestamp}-${i}`} message={msg} />
           ))}
 
           {/* Live streaming — single "Working" block */}
@@ -785,7 +881,32 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
               streamingText={streamingText}
               thinkingText={thinkingText}
               toolProgress={toolProgress}
+              processingPhase={processingPhase}
             />
+          )}
+
+          {/* Interrupted indicator */}
+          {wasInterrupted && !isProcessing && (
+            <div className="flex items-center gap-2 text-[12px] text-amber-400/70">
+              <Square className="h-3 w-3" />
+              <span>Interrupted</span>
+            </div>
+          )}
+
+          {/* Error with retry button */}
+          {lastError && !isProcessing && (
+            <div className="flex items-center gap-3 rounded-lg border border-rose-500/20 bg-rose-950/10 px-3 py-2">
+              <AlertTriangleIcon className="h-3.5 w-3.5 shrink-0 text-rose-400" />
+              <span className="flex-1 truncate text-[12px] text-rose-300/80">{lastError}</span>
+              {lastPromptRef.current && (
+                <button
+                  onClick={() => { setLastError(null); sendDirect(lastPromptRef.current!, true); }}
+                  className="shrink-0 rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 transition-colors hover:bg-rose-500/25"
+                >
+                  Retry
+                </button>
+              )}
+            </div>
           )}
 
           <div ref={messagesEndRef} />
@@ -799,19 +920,37 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             <UserQuestionForm
               questions={pendingQuestion.questions}
               onSubmit={submitQuestionAnswer}
-              onSkip={() => { setPendingQuestion(null); sendDirect('skip', true); }}
+              onSkip={() => {
+                const q = pendingQuestion;
+                setPendingQuestion(null);
+                if (q) {
+                  socket.emit('chat:resolve_question', { instanceId, toolUseId: q.toolUseId, answer: 'skip' });
+                }
+              }}
             />
           </div>
         </div>
       )}
 
-      {/* Permission prompt (ask mode) */}
+      {/* Permission prompt (ask mode) — shows front of queue */}
       {pendingPermission && !pendingQuestion && (
         <PermissionPrompt
           permission={pendingPermission}
+          queueSize={permissionQueue.length}
           onApproveSession={() => approveToolPersist(pendingPermission.toolName, 'session')}
           onApproveProject={() => approveToolPersist(pendingPermission.toolName, 'project')}
-          onReject={() => { dismissPermission(); sendDirect('no, try a different approach', true); }}
+          onReject={(message: string) => {
+            const permission = permissionQueue[0];
+            setPermissionQueue(prev => prev.slice(1));
+            if (permission) {
+              socket.emit('chat:resolve_permission', {
+                instanceId,
+                toolUseId: permission.toolUseId,
+                allow: false,
+                message,
+              });
+            }
+          }}
         />
       )}
 
@@ -948,6 +1087,30 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             </div>
           )}
 
+          {/* Context window warning */}
+          {contextUsage && contextUsage.maxTokens > 0 && contextUsage.usedTokens / contextUsage.maxTokens > 0.8 && (
+            <div className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 mt-2 text-[11px] ${
+              contextUsage.usedTokens / contextUsage.maxTokens > 0.95
+                ? 'bg-rose-950/30 text-rose-300/80'
+                : 'bg-amber-950/30 text-amber-300/70'
+            }`}>
+              <AlertTriangleIcon className="h-3 w-3 shrink-0" />
+              <span>Context {Math.round((contextUsage.usedTokens / contextUsage.maxTokens) * 100)}% full</span>
+              {contextUsage.usedTokens / contextUsage.maxTokens > 0.95 && (
+                <span className="text-rose-400/50">— consider starting a new task or using /compact</span>
+              )}
+            </div>
+          )}
+
+          {/* Rate limit warning */}
+          {rateLimitInfo && rateLimitInfo.status !== 'allowed' && (
+            <div className="flex items-center gap-1.5 rounded-md bg-amber-950/30 px-2.5 py-1 mt-2 text-[11px] text-amber-300/70">
+              <AlertTriangleIcon className="h-3 w-3 shrink-0" />
+              <span>Rate limited</span>
+              {rateLimitInfo.resetsAt && <RateLimitCountdown resetsAt={rateLimitInfo.resetsAt} />}
+            </div>
+          )}
+
           {/* Textarea row */}
           <div className="flex items-center gap-2 pt-3 pb-2">
             {/* + context button */}
@@ -1076,8 +1239,12 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || status === 'exited'}
-                className="flex items-center gap-1.5 rounded-lg px-3 py-1 text-[12px] text-neutral-500 transition-colors hover:bg-[#1a1a1a] hover:text-neutral-300 disabled:opacity-30"
+                disabled={!input.trim() || status === 'exited' || (rateLimitInfo != null && rateLimitInfo.status !== 'allowed')}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1 text-[12px] transition-colors disabled:opacity-30 ${
+                  rateLimitInfo && rateLimitInfo.status !== 'allowed'
+                    ? 'text-amber-500/50 cursor-not-allowed'
+                    : 'text-neutral-500 hover:bg-[#1a1a1a] hover:text-neutral-300'
+                }`}
               >
                 <span>Send</span>
                 <CornerDownLeft className="h-3 w-3" />
@@ -1086,6 +1253,58 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// --- Tool actions header: shows last action label when processing ---
+
+function ToolActionsHeader({ tools, isProcessing, expanded, onToggle }: {
+  tools: ContentBlock[];
+  isProcessing: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const toolCount = tools.length;
+  const lastTool = tools[toolCount - 1];
+  const lastToolInfo = lastTool ? getToolInfo(lastTool.name ?? 'Unknown', lastTool.input, true) : null;
+  const LastIcon = lastToolInfo?.icon;
+
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {isProcessing && lastToolInfo && LastIcon ? (
+          <LastIcon className="h-4 w-4 animate-pulse text-blue-300" />
+        ) : isProcessing ? (
+          <Loader className="h-4 w-4 animate-spin text-blue-300" />
+        ) : null}
+        <span>
+          {isProcessing
+            ? lastToolInfo
+              ? <><span className="text-blue-300/80">{lastToolInfo.label}</span>{toolCount > 1 && <span className="ml-1 text-neutral-600">+{toolCount - 1}</span>}</>
+              : 'Processing...'
+            : `Processed (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})`
+          }
+        </span>
+      </button>
+
+      {expanded && toolCount > 0 && (
+        <div className="ml-5 mt-1.5 space-y-1.5 border-l border-[#1e1e1e] pl-3">
+          {tools.map((tool, i) => (
+            <ToolLine
+              key={i}
+              name={tool.name ?? 'Unknown'}
+              input={tool.input}
+              isLive={isProcessing}
+              isLast={i === toolCount - 1}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1099,6 +1318,7 @@ function LiveWorkingBlock({
   streamingText,
   thinkingText,
   toolProgress,
+  processingPhase,
 }: {
   tools: ContentBlock[];
   textBlocks: ContentBlock[];
@@ -1106,15 +1326,27 @@ function LiveWorkingBlock({
   streamingText: string;
   thinkingText: string;
   toolProgress: { toolName: string; elapsedSeconds: number } | null;
+  processingPhase: 'connecting' | 'thinking' | 'working' | 'streaming' | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const toolCount = tools.length;
   const hasStreamingText = streamingText.length > 0;
   const hasThinking = thinkingText.length > 0;
+  const isActivelyThinking = processingPhase === 'thinking';
+  const isConnecting = processingPhase === 'connecting';
+  const thinkingDone = hasThinking && !isActivelyThinking;
 
   return (
     <div className="space-y-3">
+      {/* Connecting indicator — shown before any content arrives */}
+      {isConnecting && !hasThinking && !hasStreamingText && toolCount === 0 && (
+        <div className="flex items-center gap-2 text-[13px] text-neutral-500">
+          <Loader className="h-3 w-3 animate-spin text-blue-300" />
+          <span>Connecting...</span>
+        </div>
+      )}
+
       {/* Thinking block — collapsible */}
       {hasThinking && (
         <div>
@@ -1125,10 +1357,13 @@ function LiveWorkingBlock({
             {thinkingExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
             <BrainIcon className="h-3.5 w-3.5 text-violet-400" />
             <span className="text-violet-400/80">
-              {isProcessing && !hasStreamingText ? 'Thinking...' : 'Thought process'}
+              {isActivelyThinking ? 'Thinking...' : 'Thought process'}
             </span>
-            {isProcessing && !hasStreamingText && (
+            {isActivelyThinking && (
               <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+            )}
+            {thinkingDone && isProcessing && (
+              <Check className="h-3 w-3 text-violet-400/50" />
             )}
           </button>
           {thinkingExpanded && (
@@ -1139,55 +1374,35 @@ function LiveWorkingBlock({
         </div>
       )}
 
-      {/* Tool actions header — only show when there are tools */}
-      {(toolCount > 0 || (isProcessing && !hasStreamingText && !hasThinking)) && (
-        <div>
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
-          >
-            {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            {isProcessing && !hasStreamingText && !hasThinking && <Loader className="h-3 w-3 animate-spin text-blue-300" />}
-            {isProcessing && hasStreamingText && toolCount > 0 && <Loader className="h-3 w-3 animate-spin text-blue-300" />}
-            <span>
-              {isProcessing
-                ? (toolCount > 0 ? `Working (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})` : 'Processing...')
-                : `Processed (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})`
-              }
-            </span>
-          </button>
-
-          {expanded && toolCount > 0 && (
-            <div className="ml-5 mt-1.5 space-y-1.5 border-l border-[#1e1e1e] pl-3">
-              {tools.map((tool, i) => (
-                <ToolLine
-                  key={i}
-                  name={tool.name ?? 'Unknown'}
-                  input={tool.input}
-                  isLive={isProcessing}
-                  isLast={i === toolCount - 1}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+      {/* Tool actions header — shows last action when processing */}
+      {(toolCount > 0 || (isProcessing && !hasStreamingText && !hasThinking && !isConnecting)) && (
+        <ToolActionsHeader
+          tools={tools}
+          isProcessing={isProcessing}
+          expanded={expanded}
+          onToggle={() => setExpanded(!expanded)}
+        />
       )}
 
       {/* Tool progress indicator ��� real-time elapsed time during long tool runs */}
       {toolProgress && isProcessing && (
         <div className="flex items-center gap-2 text-[12px] text-neutral-600">
-          <Loader className="h-3 w-3 animate-spin text-blue-300" />
+          <ToolProgressRing seconds={toolProgress.elapsedSeconds} />
           <span>{toolProgress.toolName}</span>
           <span className="tabular-nums text-neutral-700">{Math.round(toolProgress.elapsedSeconds)}s</span>
         </div>
       )}
 
-      {/* Real-time streaming text with blinking cursor */}
+      {/* Real-time streaming text — plain pre during streaming for perf, markdown after */}
       {hasStreamingText && (
         <div className="prose prose-invert max-w-none">
-          <TextBlock text={streamingText} />
-          {isProcessing && (
-            <span className="inline-block h-4 w-0.5 animate-pulse bg-blue-400 align-text-bottom ml-0.5" />
+          {isProcessing ? (
+            <pre className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-neutral-300 font-sans">
+              {streamingText}
+              <span className="inline-block h-4 w-0.5 animate-pulse bg-blue-400 align-text-bottom ml-0.5" />
+            </pre>
+          ) : (
+            <TextBlock text={streamingText} />
           )}
         </div>
       )}
@@ -1200,9 +1415,44 @@ function LiveWorkingBlock({
   );
 }
 
-// --- Message bubble ---
+/** SVG progress ring for tool elapsed time — fills over 60s */
+function ToolProgressRing({ seconds }: { seconds: number }) {
+  const r = 5;
+  const circumference = 2 * Math.PI * r;
+  const progress = Math.min(seconds / 60, 1);
+  const offset = circumference * (1 - progress);
+  return (
+    <svg className="h-3.5 w-3.5 -rotate-90" viewBox="0 0 14 14">
+      <circle cx="7" cy="7" r={r} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-neutral-800" />
+      <circle cx="7" cy="7" r={r} fill="none" stroke="currentColor" strokeWidth="1.5"
+        className="text-blue-400 transition-all"
+        strokeDasharray={circumference} strokeDashoffset={offset} strokeLinecap="round" />
+    </svg>
+  );
+}
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+/** Live countdown for rate limit reset */
+function RateLimitCountdown({ resetsAt }: { resetsAt: number }) {
+  const [remaining, setRemaining] = useState('');
+  useEffect(() => {
+    const update = () => {
+      const diff = Math.max(0, Math.ceil((resetsAt * 1000 - Date.now()) / 1000));
+      if (diff <= 0) { setRemaining(''); return; }
+      const m = Math.floor(diff / 60);
+      const s = diff % 60;
+      setRemaining(m > 0 ? `${m}m ${s.toString().padStart(2, '0')}s` : `${s}s`);
+    };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [resetsAt]);
+  if (!remaining) return null;
+  return <span className="tabular-nums">— resumes in {remaining}</span>;
+}
+
+// --- Message bubble (memoized to avoid re-rendering on streaming state changes) ---
+
+const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === 'user';
   const hasOnlyToolResult = message.content.every(b => b.type === 'tool_result');
   if (hasOnlyToolResult) return null;
@@ -1244,7 +1494,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       })}
     </div>
   );
-}
+});
 
 // --- Group consecutive tool blocks ---
 
@@ -1373,22 +1623,43 @@ interface ToolInfo {
   animate?: boolean;
 }
 
+/** Extract short filename from a path, e.g. "/foo/bar/src/index.ts" → "index.ts" */
+function shortName(p: unknown): string {
+  if (typeof p !== 'string') return '';
+  return p.split('/').pop() ?? p;
+}
+
+/** Truncate a string, adding ellipsis if needed */
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + '…' : s;
+}
+
 function getToolInfo(name: string, input: unknown, isLive: boolean): ToolInfo {
   const inp = input as Record<string, unknown> | null;
   switch (name) {
-    case 'Read': return { icon: BookOpen, label: `Reading ${inp?.file_path ?? 'file'}`, animate: isLive };
-    case 'Edit': return { icon: Pencil, label: `Editing ${inp?.file_path ?? 'file'}`, animate: isLive };
-    case 'Write': return { icon: FilePlus, label: `Writing ${inp?.file_path ?? 'file'}`, animate: isLive };
-    case 'Bash': return { icon: Terminal, label: `Running ${typeof inp?.command === 'string' ? inp.command.slice(0, 60) : 'command'}`, animate: isLive };
-    case 'Glob': return { icon: FolderSearch, label: `Searching ${inp?.pattern ?? 'files'}`, animate: isLive };
-    case 'Grep': return { icon: Search, label: `Searching for ${inp?.pattern ?? 'pattern'}`, animate: isLive };
-    case 'TodoWrite': return { icon: ListChecks, label: 'Updating tasks', animate: isLive };
-    case 'WebSearch': return { icon: Globe, label: `Searching web: ${inp?.query ?? ''}`, animate: isLive };
-    case 'WebFetch': return { icon: Link, label: `Fetching ${inp?.url ?? 'URL'}`, animate: isLive };
-    case 'Agent': return { icon: Bot, label: `Running agent: ${inp?.description ?? ''}`, animate: isLive };
-    case 'Skill': return { icon: Zap, label: `Running /${inp?.skill ?? 'skill'}`, animate: isLive };
+    case 'Read': return { icon: BookOpen, label: `Read ${shortName(inp?.file_path) || 'file'}`, animate: isLive };
+    case 'Edit': return { icon: Pencil, label: `Edit ${shortName(inp?.file_path) || 'file'}`, animate: isLive };
+    case 'Write': return { icon: FilePlus, label: `Write ${shortName(inp?.file_path) || 'file'}`, animate: isLive };
+    case 'Bash': return { icon: Terminal, label: typeof inp?.command === 'string' ? `$ ${truncate(inp.command, 30)}` : 'Run command', animate: isLive };
+    case 'Glob': return { icon: FolderSearch, label: `Search ${truncate(String(inp?.pattern ?? 'files'), 25)}`, animate: isLive };
+    case 'Grep': return { icon: Search, label: `Grep ${truncate(String(inp?.pattern ?? 'pattern'), 25)}`, animate: isLive };
+    case 'TodoWrite': return { icon: ListChecks, label: 'Update tasks', animate: isLive };
+    case 'WebSearch': return { icon: Globe, label: `Web ${truncate(String(inp?.query ?? ''), 25)}`, animate: isLive };
+    case 'WebFetch': return { icon: Link, label: `Fetch ${shortName(inp?.url) || 'URL'}`, animate: isLive };
+    case 'Agent': return { icon: Bot, label: `Agent ${truncate(String(inp?.description ?? ''), 25)}`, animate: isLive };
+    case 'Skill': return { icon: Zap, label: `/${inp?.skill ?? 'skill'}`, animate: isLive };
     default: return { icon: Zap, label: name, animate: isLive };
   }
+}
+
+/** Extract a 1-line preview from a tool result for collapsed display */
+function getResultPreview(result: { content?: string; stdout?: string; stderr?: string; is_error?: boolean } | undefined): string | null {
+  if (!result) return null;
+  const raw = result.stdout || result.content || result.stderr || '';
+  if (!raw) return null;
+  const firstLine = raw.split('\n').find(l => l.trim().length > 0)?.trim();
+  if (!firstLine) return null;
+  return firstLine.length > 80 ? firstLine.slice(0, 80) + '...' : firstLine;
 }
 
 function ToolLine({ name, input, result, isLive, isLast }: {
@@ -1423,9 +1694,10 @@ function ToolLine({ name, input, result, isLive, isLast }: {
             : <ChevronRight className="h-2.5 w-2.5 text-neutral-700" />
         )}
       </button>
-      {context && !showDetails && (
+      {/* Inline context or 1-line result preview when collapsed */}
+      {!showDetails && (
         <div className="ml-5 truncate text-[11px] font-mono text-neutral-700">
-          {context}
+          {context ?? (hasResult && getResultPreview(result))}
         </div>
       )}
       {showDetails && (
@@ -1520,15 +1792,20 @@ function computeLineDiff(oldLines: string[], newLines: string[]): Array<{ type: 
 
 function PermissionPrompt({
   permission,
+  queueSize = 1,
   onApproveSession,
   onApproveProject,
   onReject,
 }: {
   permission: { toolName: string; toolInput: unknown; toolUseId: string };
+  queueSize?: number;
   onApproveSession: () => void;
   onApproveProject: () => void;
-  onReject: () => void;
+  onReject: (message: string) => void;
 }) {
+  const [rejectMode, setRejectMode] = useState(false);
+  const [rejectMessage, setRejectMessage] = useState('');
+  const rejectInputRef = useRef<HTMLTextAreaElement>(null);
   const inp = permission.toolInput as Record<string, unknown> | null;
   const filePath = inp?.file_path as string | undefined;
   const fileName = filePath ? filePath.split('/').pop() : undefined;
@@ -1538,14 +1815,56 @@ function PermissionPrompt({
   const isFileOp = isEdit || isWrite;
   const toolLabel = isEdit ? 'Edit file' : isWrite ? 'Write file' : isBash ? 'Run command' : permission.toolName;
 
+  // Focus reject input when entering reject mode
+  useEffect(() => {
+    if (rejectMode) {
+      rejectInputRef.current?.focus();
+    }
+  }, [rejectMode]);
+
+  // Keyboard shortcuts: 1/2/3 for options, Escape to cancel reject mode
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        // Inside reject input: Enter to send, Escape to cancel
+        if (rejectMode && e.target === rejectInputRef.current) {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            const msg = rejectMessage.trim();
+            if (msg) onReject(msg);
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            setRejectMode(false);
+            setRejectMessage('');
+          }
+        }
+        return;
+      }
+      if (rejectMode) return;
+      if (e.key === '1') { e.preventDefault(); onApproveSession(); }
+      if (e.key === '2') { e.preventDefault(); onApproveProject(); }
+      if (e.key === '3') { e.preventDefault(); setRejectMode(true); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [rejectMode, rejectMessage, onApproveSession, onApproveProject, onReject]);
+
   return (
     <div className="shrink-0 px-6 py-3">
       <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-blue-500/30 bg-[#141418]">
         {/* Header */}
         <div className="px-5 pt-4 pb-2">
-          <p className={`text-[13px] font-semibold ${isFileOp ? 'text-emerald-300' : isBash ? 'text-amber-300' : 'text-blue-300'}`}>
-            {toolLabel}
-          </p>
+          <div className="flex items-center gap-2">
+            <p className={`text-[13px] font-semibold ${isFileOp ? 'text-emerald-300' : isBash ? 'text-amber-300' : 'text-blue-300'}`}>
+              {toolLabel}
+            </p>
+            {queueSize > 1 && (
+              <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-300">
+                +{queueSize - 1} more
+              </span>
+            )}
+          </div>
           {fileName && (
             <p className="mt-0.5 text-[12px] text-neutral-500">{fileName}</p>
           )}
@@ -1581,7 +1900,7 @@ function PermissionPrompt({
         )}
 
         {/* Question */}
-        <p className="px-5 pb-3 text-[13px] text-neutral-300">
+        <p className="px-5 pb-3 text-[13px] font-medium text-neutral-300">
           {isFileOp
             ? `Do you want to make this edit to ${fileName ?? 'this file'}?`
             : isBash
@@ -1596,7 +1915,10 @@ function PermissionPrompt({
             className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1a1a1e]"
           >
             <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-blue-500/70 text-[11px] font-semibold text-white">1</div>
-            <span className="text-[13px] font-medium text-neutral-300">Yes</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[13px] font-medium text-neutral-300">Yes</span>
+              <kbd className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500">1</kbd>
+            </div>
           </button>
           <button
             onClick={onApproveProject}
@@ -1604,21 +1926,57 @@ function PermissionPrompt({
           >
             <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-neutral-700/50 text-[11px] font-semibold text-neutral-400">2</div>
             <div className="min-w-0 flex-1">
-              <span className="block text-[13px] font-medium text-neutral-300">
-                Yes, allow all {isFileOp ? 'edits' : isBash ? 'commands' : 'uses'} during this session
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-medium text-neutral-300">
+                  Yes, allow all {isFileOp ? 'edits' : isBash ? 'commands' : 'uses'} during this session
+                </span>
+                <kbd className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500">2</kbd>
+              </div>
             </div>
           </button>
           <button
-            onClick={onReject}
-            className="flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors hover:bg-[#1a1a1e]"
+            onClick={() => setRejectMode(true)}
+            className={`flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${rejectMode ? 'bg-blue-500/10' : 'hover:bg-[#1a1a1e]'}`}
           >
             <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-neutral-700/50 text-[11px] font-semibold text-neutral-400">3</div>
             <div className="min-w-0 flex-1">
-              <span className="block text-[13px] font-medium text-neutral-300">No, and tell Claude what to do differently</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[13px] font-medium text-neutral-300">No, and tell Claude what to do differently</span>
+                <kbd className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500">3</kbd>
+              </div>
             </div>
           </button>
         </div>
+
+        {/* Reject message input */}
+        {rejectMode && (
+          <div className="border-t border-[#1e1e1e] px-5 py-3">
+            <textarea
+              ref={rejectInputRef}
+              value={rejectMessage}
+              onChange={e => setRejectMessage(e.target.value)}
+              placeholder="Tell Claude what to do instead..."
+              rows={2}
+              className="w-full resize-none rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] px-3 py-2 text-[13px] text-neutral-300 placeholder-neutral-600 outline-none focus:border-blue-500/50"
+            />
+            <div className="mt-2 flex items-center justify-end gap-2">
+              <button
+                onClick={() => { setRejectMode(false); setRejectMessage(''); }}
+                className="rounded-lg px-3 py-1.5 text-[12px] font-medium text-neutral-400 transition-colors hover:bg-[#1a1a1e]"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { const msg = rejectMessage.trim(); if (msg) onReject(msg); }}
+                disabled={!rejectMessage.trim()}
+                className="flex items-center gap-2 rounded-lg bg-blue-500/70 px-4 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Send
+                <kbd className="flex items-center gap-0.5 rounded bg-blue-400/30 px-1.5 py-0.5 text-[10px] font-medium text-blue-200">&#x21B5;</kbd>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -1972,18 +2330,19 @@ function UserQuestionForm({
   onSkip: () => void;
 }) {
   const [selections, setSelections] = useState<Record<number, Set<string>>>({});
+  const isMultiChoice = questions.some(q => q.allowMultiple);
 
   const toggle = (qIdx: number, label: string, multi: boolean) => {
+    if (!multi) {
+      // Single-choice: submit immediately on click
+      onSubmit([label]);
+      return;
+    }
     setSelections(prev => {
       const current = prev[qIdx] ?? new Set<string>();
       const next = new Set(current);
-      if (multi) {
-        if (next.has(label)) next.delete(label);
-        else next.add(label);
-      } else {
-        if (next.has(label)) next.clear();
-        else { next.clear(); next.add(label); }
-      }
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
       return { ...prev, [qIdx]: next };
     });
   };
@@ -2001,6 +2360,28 @@ function UserQuestionForm({
 
   const hasSelection = Object.values(selections).some(s => s.size > 0);
 
+  // Keyboard shortcut: number keys select options
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Skip if user is typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const num = parseInt(e.key, 10);
+      if (num >= 1 && questions.length > 0) {
+        const q = questions[0];
+        if (q.options && num <= q.options.length) {
+          e.preventDefault();
+          toggle(0, q.options[num - 1].label, q.allowMultiple ?? false);
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onSkip();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  });
+
   return (
     <div className="overflow-hidden rounded-xl border border-blue-500/30 bg-[#141418]">
       {questions.map((q, qIdx) => {
@@ -2012,7 +2393,7 @@ function UserQuestionForm({
             {q.header && (
               <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-neutral-600">{q.header}</p>
             )}
-            <p className="mb-3 text-[14px] font-medium text-neutral-200">{q.question}</p>
+            <p className="mb-3 text-[14px] font-semibold text-neutral-200">{q.question}</p>
 
             {q.options && q.options.length > 0 ? (
               <div className="flex flex-col gap-1.5">
@@ -2026,7 +2407,6 @@ function UserQuestionForm({
                         isSelected ? 'bg-blue-500/15' : 'hover:bg-[#1a1a1e]'
                       }`}
                     >
-                      {/* Checkbox / Numbered indicator */}
                       {multi ? (
                         <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border ${
                           isSelected
@@ -2036,11 +2416,7 @@ function UserQuestionForm({
                           {isSelected && <Check className="h-3 w-3" />}
                         </div>
                       ) : (
-                        <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-[11px] font-semibold ${
-                          isSelected
-                            ? 'bg-blue-500/70 text-white'
-                            : 'bg-neutral-700/50 text-neutral-400'
-                        }`}>
+                        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded bg-blue-500/70 text-[11px] font-semibold text-white">
                           {oIdx + 1}
                         </div>
                       )}
@@ -2049,7 +2425,7 @@ function UserQuestionForm({
                           {opt.label}
                         </span>
                         {opt.description && (
-                          <span className="block text-[12px] text-neutral-600">{opt.description}</span>
+                          <span className="block text-[12px] text-neutral-500">{opt.description}</span>
                         )}
                       </div>
                     </button>
@@ -2057,7 +2433,6 @@ function UserQuestionForm({
                 })}
               </div>
             ) : (
-              /* Free-text input if no options */
               <input
                 type="text"
                 placeholder="Type your answer..."
@@ -2075,8 +2450,8 @@ function UserQuestionForm({
       })}
 
       {/* Footer */}
-      <div className="flex items-center justify-end gap-2 border-t border-[#1e1e1e] px-5 py-3">
-        {hasSelection ? (
+      <div className="flex items-center justify-end gap-2 px-5 py-3">
+        {isMultiChoice && hasSelection ? (
           <button
             onClick={handleSubmit}
             className="flex items-center gap-2 rounded-lg bg-blue-500/70 px-4 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-blue-500"

@@ -5,7 +5,7 @@ import os from 'os';
 
 const STORE_DIR = path.join(os.homedir(), '.claude-dashboard');
 const STORE_FILE = path.join(STORE_DIR, 'tasks.json');
-const MESSAGES_DIR = path.join(STORE_DIR, 'messages');
+
 
 interface StoredTask {
   id: string;
@@ -157,49 +157,6 @@ export class TaskStore {
 
   getHistory(): StoredTask[] {
     return this.tasks.filter(t => t.status === 'exited');
-  }
-
-  // --- Message persistence ---
-
-  async saveMessages(taskId: string, messages: unknown[]): Promise<void> {
-    try {
-      await fs.mkdir(MESSAGES_DIR, { recursive: true });
-      const filePath = path.join(MESSAGES_DIR, `${taskId}.json`);
-      await fs.writeFile(filePath, JSON.stringify(messages), 'utf-8');
-    } catch (err) {
-      console.log(`[task-store] Failed to save messages for ${taskId}:`, err);
-    }
-  }
-
-  loadMessages(taskId: string): unknown[] {
-    try {
-      const filePath = path.join(MESSAGES_DIR, `${taskId}.json`);
-      if (existsSync(filePath)) {
-        const raw = readFileSync(filePath, 'utf-8');
-        return JSON.parse(raw);
-      }
-    } catch (err) {
-      console.log(`[task-store] Failed to load messages for ${taskId}:`, err);
-    }
-    return [];
-  }
-
-  // Also load messages for an old task ID (for resume — old task may have different ID)
-  loadMessagesBySessionId(sessionId: string): unknown[] {
-    const task = this.tasks.find(t => t.sessionId === sessionId);
-    if (task) return this.loadMessages(task.id);
-    return [];
-  }
-
-  async removeMessages(taskId: string): Promise<void> {
-    try {
-      const filePath = path.join(MESSAGES_DIR, `${taskId}.json`);
-      if (existsSync(filePath)) {
-        await fs.unlink(filePath);
-      }
-    } catch {
-      // non-fatal
-    }
   }
 
   // Find tasks that have worktrees still on disk but no running instance

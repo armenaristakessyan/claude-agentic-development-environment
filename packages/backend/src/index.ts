@@ -88,11 +88,6 @@ async function main(): Promise<void> {
           effort: task.effort ?? undefined,
           permissionMode: task.permissionMode ?? undefined,
         });
-        // Migrate messages to new instance ID
-        const oldMessages = taskStore.loadMessages(task.id);
-        if (oldMessages.length > 0) {
-          await taskStore.saveMessages(instance.id, oldMessages);
-        }
         // Replace old task entry with new instance
         await taskStore.addTask({
           id: instance.id,
@@ -111,7 +106,6 @@ async function main(): Promise<void> {
           permissionMode: task.permissionMode ?? null,
           createdAt: task.createdAt,
         });
-        await taskStore.removeMessages(task.id);
         await taskStore.removeTask(task.id);
         console.log(`[server] Resumed task: ${task.taskDescription ?? task.projectName} (${instance.id})`);
       } catch (err) {
