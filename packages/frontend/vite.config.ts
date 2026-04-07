@@ -9,10 +9,13 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
+      devOptions: {
+        enabled: true,
+      },
       includeAssets: ['favicon.png'],
       manifest: {
-        name: 'Claude ADE',
-        short_name: 'Claude ADE',
+        name: 'Agentic Development Environment',
+        short_name: 'ADE',
         description: 'Agentic Development Environment — orchestrate multiple Claude Code instances',
         theme_color: '#0d0d0d',
         background_color: '#0d0d0d',
