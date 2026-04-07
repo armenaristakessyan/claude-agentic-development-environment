@@ -106,6 +106,13 @@
   color-scheme: light;
 }
 
+/* ── Root height chain (needed for zoom compensation) ─────────────── */
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
 /* ── Scrollbar styling (uses theme tokens) ──────────────────────────── */
 
 * {

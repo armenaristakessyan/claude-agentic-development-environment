@@ -134,9 +134,9 @@ export default function App() {
     [queue],
   );
 
-  const handleLaunch = useCallback(async (projectPath: string, taskDescription?: string, branchName?: string) => {
+  const handleLaunch = useCallback(async (projectPath: string, taskDescription?: string, branchName?: string, useWorktree?: boolean) => {
     try {
-      const instance = await spawnInstance(projectPath, taskDescription, branchName);
+      const instance = await spawnInstance(projectPath, taskDescription, branchName, useWorktree);
       setSelectedInstanceId(instance.id);
       setNewTaskOpen(false);
       fetchTasks();
@@ -278,7 +278,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen flex-col bg-root">
+    <div className="flex h-full flex-col bg-root">
       {/* Topbar — full width, same bg as root */}
       <div className="flex h-10 shrink-0 items-center px-4">
         {/* Left: logo + project + branch */}
@@ -503,7 +503,7 @@ function NewTaskPicker({
   onClose,
 }: {
   projects: Project[];
-  onLaunch: (projectPath: string, taskDescription?: string, branchName?: string) => void;
+  onLaunch: (projectPath: string, taskDescription?: string, branchName?: string, useWorktree?: boolean) => void;
   onClose: () => void;
 }) {
   const [filter, setFilter] = useState('');
