@@ -26,7 +26,11 @@ function applyTheme(theme: Theme) {
 }
 
 function applyZoom(zoom: Zoom) {
-  document.documentElement.style.setProperty('zoom', String(zoom / 100));
+  const z = zoom / 100;
+  document.documentElement.style.setProperty('zoom', String(z));
+  // Compensate zoom so the layout fits the actual viewport (prevents outer scrollbar)
+  document.documentElement.style.height = z === 1 ? '' : `${100 / z}vh`;
+  document.documentElement.style.overflow = z === 1 ? '' : 'hidden';
   localStorage.setItem('ade-zoom', String(zoom));
 }
 
