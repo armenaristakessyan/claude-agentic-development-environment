@@ -115,7 +115,7 @@ export default function TaskSidebar({
       <div className="px-3 py-2">
         <button
           onClick={onNewTask}
-          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-[13px] text-neutral-400 transition-colors hover:bg-neutral-800/30 hover:text-neutral-200"
+          className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-[13px] text-tertiary transition-colors hover:bg-elevated/30 hover:text-primary"
         >
           <Plus className="h-4 w-4" />
           New Task
@@ -125,13 +125,13 @@ export default function TaskSidebar({
       {/* Search */}
       <div className="px-3 py-2">
         <div className="relative">
-          <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-neutral-600" />
+          <Search className="absolute left-2 top-1.5 h-3.5 w-3.5 text-faint" />
           <input
             type="text"
             placeholder="Search tasks"
             value={filter}
             onChange={e => setFilter(e.target.value)}
-            className="w-full rounded bg-transparent py-1 pl-7 pr-2 text-[12px] text-neutral-400 placeholder-neutral-600 outline-none transition-colors focus:bg-neutral-900/50"
+            className="w-full rounded bg-transparent py-1 pl-7 pr-2 text-[12px] text-tertiary placeholder-placeholder outline-none transition-colors focus:bg-surface/50"
           />
         </div>
       </div>
@@ -139,7 +139,7 @@ export default function TaskSidebar({
       {/* Active tasks — takes remaining space */}
       <div className="flex-1 overflow-y-auto px-2">
         {filteredActive.length === 0 ? (
-          <p className="py-6 text-center text-[12px] text-neutral-600">
+          <p className="py-6 text-center text-[12px] text-faint">
             {filter ? 'No matching tasks' : 'No tasks yet'}
           </p>
         ) : (
@@ -159,22 +159,22 @@ export default function TaskSidebar({
                   onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') onSelect(instance.id); }}
                   className={`group flex w-full cursor-pointer flex-col rounded-lg px-3 py-2.5 text-left transition-colors ${
                     isSelected
-                      ? 'bg-neutral-800/50'
-                      : 'hover:bg-neutral-800/20'
+                      ? 'bg-elevated/50'
+                      : 'hover:bg-elevated/20'
                   }`}
                 >
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
                       <span className={`block truncate text-[13px] leading-tight ${
-                        isSelected ? 'text-neutral-200' : 'text-neutral-400'
+                        isSelected ? 'text-primary' : 'text-tertiary'
                       }`}>
                         {label}
                       </span>
-                      <span className="mt-1 flex items-center gap-1.5 text-[11px] text-neutral-600">
+                      <span className="mt-1 flex items-center gap-1.5 text-[11px] text-faint">
                         <span className={`inline-block h-1.5 w-1.5 rounded-full ${STATUS_DOT[instance.status]}`} />
                         {STATUS_LABEL[instance.status]}
                         {(instance.totalCostUsd > 0 || instance.totalInputTokens > 0) && (
-                          <span className="ml-1 text-[10px] text-neutral-700">
+                          <span className="ml-1 text-[10px] text-faint">
                             {formatTokens(instance.totalInputTokens + instance.totalOutputTokens)}
                             {instance.totalCostUsd > 0 && ` · $${instance.totalCostUsd.toFixed(4)}`}
                           </span>
@@ -189,7 +189,7 @@ export default function TaskSidebar({
                           setConfirmKillId(instance.id);
                           setDeleteWorktreeChecked(false);
                         }}
-                        className="mt-0.5 shrink-0 rounded p-1 text-neutral-700 opacity-0 transition-all hover:text-rose-300 group-hover:opacity-100"
+                        className="mt-0.5 shrink-0 rounded p-1 text-faint opacity-0 transition-all hover:text-rose-300 group-hover:opacity-100"
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
@@ -213,7 +213,7 @@ export default function TaskSidebar({
                             <span className="shrink-0 text-rose-500/40">failed</span>
                           )}
                           {agent.status !== 'failed' && agent.lastToolName && (
-                            <span className="shrink-0 text-neutral-700">
+                            <span className="shrink-0 text-faint">
                               → {agent.lastToolName}
                             </span>
                           )}
@@ -237,14 +237,14 @@ export default function TaskSidebar({
             className="group relative h-0 shrink-0 cursor-row-resize"
           >
             <div className="absolute inset-x-0 -top-1.5 -bottom-1.5" />
-            <div className="absolute inset-x-0 top-0 h-px bg-neutral-800/40 transition-colors group-hover:bg-blue-500/50 group-active:bg-blue-500" />
+            <div className="absolute inset-x-0 top-0 h-px bg-elevated/40 transition-colors group-hover:bg-blue-500/50 group-active:bg-blue-500" />
           </div>
 
           {/* History header */}
           <div className="flex shrink-0 items-center gap-2 px-4 py-2">
-            <Clock className="h-3 w-3 text-neutral-600" />
-            <span className="text-[11px] font-medium text-neutral-600">History</span>
-            <span className="ml-auto text-[10px] text-neutral-700">{filteredHistory.length}</span>
+            <Clock className="h-3 w-3 text-faint" />
+            <span className="text-[11px] font-medium text-faint">History</span>
+            <span className="ml-auto text-[10px] text-faint">{filteredHistory.length}</span>
           </div>
 
           {/* History list */}
@@ -257,13 +257,13 @@ export default function TaskSidebar({
                 return (
                   <div
                     key={task.id}
-                    className="group flex items-start gap-2 rounded-lg px-3 py-2 transition-colors hover:bg-neutral-800/20"
+                    className="group flex items-start gap-2 rounded-lg px-3 py-2 transition-colors hover:bg-elevated/20"
                   >
                     <div className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] leading-tight text-neutral-600">
+                      <span className="block truncate text-[13px] leading-tight text-faint">
                         {label}
                       </span>
-                      <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-neutral-700">
+                      <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-faint">
                         <span className="inline-block h-1.5 w-1.5 rounded-full bg-neutral-700" />
                         {task.projectName}
                         {(task.totalInputTokens > 0 || task.totalCostUsd > 0) && (
@@ -279,7 +279,7 @@ export default function TaskSidebar({
                       {canResume && (
                         <button
                           onClick={() => onResumeTask(task.id)}
-                          className="rounded p-1 text-neutral-600 hover:text-emerald-300"
+                          className="rounded p-1 text-faint hover:text-emerald-300"
                           title="Resume in worktree"
                         >
                           <Play className="h-3 w-3" />
@@ -287,7 +287,7 @@ export default function TaskSidebar({
                       )}
                       <button
                         onClick={() => onRemoveTask(task.id)}
-                        className="rounded p-1 text-neutral-600 hover:text-rose-300"
+                        className="rounded p-1 text-faint hover:text-rose-300"
                         title="Remove from history"
                       >
                         <X className="h-3 w-3" />
@@ -308,34 +308,34 @@ export default function TaskSidebar({
           onClick={() => setConfirmKillId(null)}
         >
           <div
-            className="mx-4 w-full max-w-lg overflow-hidden rounded-xl border border-[#1e1e1e] bg-[#111111] shadow-2xl"
+            className="mx-4 w-full max-w-lg overflow-hidden rounded-xl border border-border-default bg-modal shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="border-b border-[#1e1e1e] px-5 py-4">
+            <div className="border-b border-border-default px-5 py-4">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-500/10">
                   <Trash2 className="h-4 w-4 text-gray-400" />
                 </div>
                 <div>
-                  <span className="block text-[14px] font-medium text-neutral-200">Kill Task</span>
-                  <span className="block text-[12px] text-neutral-600">{killTarget?.projectName}</span>
+                  <span className="block text-[14px] font-medium text-primary">Kill Task</span>
+                  <span className="block text-[12px] text-faint">{killTarget?.projectName}</span>
                 </div>
               </div>
             </div>
 
             {/* Body */}
             <div className="px-5 py-4">
-              <p className="text-[13px] text-neutral-400">
+              <p className="text-[13px] text-tertiary">
                 This will terminate the running Claude instance.
               </p>
               {hasWorktree && (
-                <label className="mt-3 flex items-center gap-2.5 rounded-lg bg-[#0d0d0d] px-3 py-2.5 text-[12px] text-neutral-500">
+                <label className="mt-3 flex items-center gap-2.5 rounded-lg bg-root px-3 py-2.5 text-[12px] text-muted">
                   <input
                     type="checkbox"
                     checked={deleteWorktreeChecked}
                     onChange={e => setDeleteWorktreeChecked(e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-[#2a2a2a] bg-[#0d0d0d] accent-red-500"
+                    className="h-3.5 w-3.5 rounded border-border-input bg-root accent-red-500"
                   />
                   Also delete worktree and branch
                 </label>
@@ -343,10 +343,10 @@ export default function TaskSidebar({
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-2 border-t border-[#1e1e1e] px-5 py-3">
+            <div className="flex items-center justify-end gap-2 border-t border-border-default px-5 py-3">
               <button
                 onClick={() => setConfirmKillId(null)}
-                className="rounded-lg px-4 py-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-300"
+                className="rounded-lg px-4 py-2 text-[13px] text-muted transition-colors hover:text-secondary"
               >
                 Cancel
               </button>

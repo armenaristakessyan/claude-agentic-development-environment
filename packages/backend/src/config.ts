@@ -14,6 +14,8 @@ interface AppConfig {
   statusPatterns: {
     waitingInput: string[];
   };
+  theme: 'dark' | 'light';
+  zoom: 100 | 110 | 125 | 150;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -35,6 +37,8 @@ const DEFAULT_CONFIG: AppConfig = {
       '╭─',
     ],
   },
+  theme: 'dark',
+  zoom: 100,
 };
 
 export class ConfigService {

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -7,8 +7,19 @@
     <link rel="apple-touch-icon" href="/pwa-192x192.png" />
     <meta name="theme-color" content="#0d0d0d" />
     <title>Claude ADE</title>
+    <script>
+      // Prevent flash-of-wrong-theme: apply theme before any rendering
+      (function() {
+        var theme = localStorage.getItem('ade-theme') || 'dark';
+        document.documentElement.setAttribute('data-theme', theme);
+        var zoom = localStorage.getItem('ade-zoom');
+        if (zoom) document.documentElement.style.zoom = Number(zoom) / 100;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', theme === 'dark' ? '#0d0d0d' : '#f5f5f5');
+      })();
+    </script>
   </head>
-  <body class="bg-[#0d0d0d] text-white">
+  <body class="bg-root text-primary">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <!-- <a target="_blank" href="https://icons8.com/icon/1G3UNEZHMjPH/claude-ai">Claude Ai</a> icône par <a target="_blank" href="https://icons8.com">Icons8</a> -->

@@ -210,23 +210,23 @@ export default function ProjectList({ projects, instances, loading, scanPaths, s
     <div className="flex flex-col gap-1">
       {/* Search — subtle, borderless */}
       <div className="relative px-1">
-        <Search className="absolute left-3 top-2 h-3.5 w-3.5 text-neutral-600" />
+        <Search className="absolute left-3 top-2 h-3.5 w-3.5 text-faint" />
         <input
           type="text"
           placeholder="Search..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          className="w-full rounded bg-transparent py-1.5 pl-7 pr-3 text-[12px] text-neutral-400 placeholder-neutral-600 outline-none transition-colors focus:bg-neutral-900/50"
+          className="w-full rounded bg-transparent py-1.5 pl-7 pr-3 text-[12px] text-tertiary placeholder-placeholder outline-none transition-colors focus:bg-surface/50"
         />
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-8 text-neutral-600">
+        <div className="flex items-center justify-center py-8 text-faint">
           <Loader2 className="h-4 w-4 animate-spin" />
         </div>
       ) : filtered ? (
         filtered.length === 0 ? (
-          <p className="py-6 text-center text-[12px] text-neutral-600">No projects match</p>
+          <p className="py-6 text-center text-[12px] text-faint">No projects match</p>
         ) : (
           <div className="flex flex-col">
             {filtered.map(project => {
@@ -251,7 +251,7 @@ export default function ProjectList({ projects, instances, loading, scanPaths, s
           </div>
         )
       ) : tree.length === 0 ? (
-        <p className="py-6 text-center text-[12px] text-neutral-600">No projects found</p>
+        <p className="py-6 text-center text-[12px] text-faint">No projects found</p>
       ) : (
         <div className="flex flex-col">
           <TreeNodeList
@@ -351,16 +351,16 @@ function FolderRow({
     <>
       <button
         onClick={() => treeProps.onToggle(node.fullPath)}
-        className="flex w-full items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-neutral-800/30"
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-elevated/30"
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
       >
         {isExpanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 text-neutral-600" />
+          <ChevronDown className="h-3 w-3 shrink-0 text-faint" />
         ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 text-neutral-600" />
+          <ChevronRight className="h-3 w-3 shrink-0 text-faint" />
         )}
-        <Folder className={`h-3.5 w-3.5 shrink-0 ${isExpanded ? 'text-neutral-400' : 'text-neutral-500'}`} />
-        <span className="truncate text-[13px] text-neutral-400">{node.name}</span>
+        <Folder className={`h-3.5 w-3.5 shrink-0 ${isExpanded ? 'text-tertiary' : 'text-muted'}`} />
+        <span className="truncate text-[13px] text-tertiary">{node.name}</span>
       </button>
 
       {isExpanded && (
@@ -406,7 +406,7 @@ function ProjectRow({
   return (
     <>
       <div
-        className={`group flex items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-neutral-800/30 ${
+        className={`group flex items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-elevated/30 ${
           isActive ? 'bg-blue-500/8' : ''
         }`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
@@ -414,7 +414,7 @@ function ProjectRow({
         {hasWorktrees ? (
           <button
             onClick={e => { e.stopPropagation(); onToggleWorktrees(); }}
-            className="shrink-0 text-neutral-600 hover:text-neutral-400"
+            className="shrink-0 text-faint hover:text-tertiary"
           >
             {isProjectExpanded
               ? <ChevronDown className="h-3 w-3" />
@@ -426,14 +426,14 @@ function ProjectRow({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className={`truncate text-[13px] ${isActive ? 'text-neutral-200' : 'text-neutral-400'}`}>
+            <span className={`truncate text-[13px] ${isActive ? 'text-primary' : 'text-tertiary'}`}>
               {project.name}
             </span>
             {project.hasClaudeMd && (
-              <span title="Has CLAUDE.md"><FileText className="h-3 w-3 shrink-0 text-neutral-600" /></span>
+              <span title="Has CLAUDE.md"><FileText className="h-3 w-3 shrink-0 text-faint" /></span>
             )}
             {project.isWorktree && (
-              <span className="shrink-0 text-[10px] text-neutral-600">wt</span>
+              <span className="shrink-0 text-[10px] text-faint">wt</span>
             )}
           </div>
         </div>
@@ -445,7 +445,7 @@ function ProjectRow({
                 e.stopPropagation();
                 onDeleteWorktree(project.parentProject!, project.path);
               }}
-              className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
+              className="shrink-0 rounded p-1 text-faint opacity-0 transition-all hover:text-red-400 group-hover:opacity-100"
               title="Delete worktree"
             >
               <Trash2 className="h-3 w-3" />
@@ -454,7 +454,7 @@ function ProjectRow({
           <button
             onClick={onLaunch}
             disabled={isLaunching}
-            className="shrink-0 rounded p-1 text-neutral-600 opacity-0 transition-all hover:text-neutral-300 group-hover:opacity-100 disabled:opacity-50"
+            className="shrink-0 rounded p-1 text-faint opacity-0 transition-all hover:text-secondary group-hover:opacity-100 disabled:opacity-50"
             title="Launch Claude Code"
           >
             {isLaunching ? (
@@ -497,11 +497,11 @@ function WorktreeRow({
 }) {
   return (
     <div
-      className="group flex items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-neutral-800/30"
+      className="group flex items-center gap-2 rounded px-2 py-1.5 transition-colors hover:bg-elevated/30"
       style={{ paddingLeft: `${depth * 16 + 8}px` }}
     >
-      <GitBranch className="h-3 w-3 shrink-0 text-neutral-600" />
-      <span className="min-w-0 flex-1 truncate text-[12px] text-neutral-500">
+      <GitBranch className="h-3 w-3 shrink-0 text-faint" />
+      <span className="min-w-0 flex-1 truncate text-[12px] text-muted">
         {worktree.gitBranch ?? worktree.name}
       </span>
 

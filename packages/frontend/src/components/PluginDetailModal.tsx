@@ -28,25 +28,25 @@ export default function PluginDetailModal({ plugin, onClose, onInstall, onUninst
       onClick={onClose}
     >
       <div
-        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[#1e1e1e] bg-[#111111]"
+        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border-default bg-modal"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-start gap-3 border-b border-[#1e1e1e] px-5 py-4">
+        <div className="flex items-start gap-3 border-b border-border-default px-5 py-4">
           <div className="flex-1">
             <div className="flex items-center gap-2">
-              <h2 className="text-[15px] font-semibold text-neutral-200">{plugin.name}</h2>
+              <h2 className="text-[15px] font-semibold text-primary">{plugin.name}</h2>
               {plugin.version && (
-                <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
+                <span className="rounded bg-elevated px-1.5 py-0.5 text-[10px] text-tertiary">
                   v{plugin.version}
                 </span>
               )}
             </div>
             <div className="mt-1 flex items-center gap-2">
               {plugin.author && (
-                <span className="text-[12px] text-neutral-500">{plugin.author.name}</span>
+                <span className="text-[12px] text-muted">{plugin.author.name}</span>
               )}
-              <span className="rounded bg-neutral-800/50 px-1.5 py-0.5 text-[10px] text-neutral-500">
+              <span className="rounded bg-elevated/50 px-1.5 py-0.5 text-[10px] text-muted">
                 {marketplaceLabel(plugin.marketplace)}
               </span>
               {plugin.segment && (
@@ -55,7 +55,7 @@ export default function PluginDetailModal({ plugin, onClose, onInstall, onUninst
                 </span>
               )}
               {plugin.installCount != null && plugin.installCount > 0 && (
-                <span className="flex items-center gap-0.5 text-[10px] text-neutral-500">
+                <span className="flex items-center gap-0.5 text-[10px] text-muted">
                   <Download className="h-2.5 w-2.5" />
                   {formatCount(plugin.installCount)} installs
                 </span>
@@ -64,7 +64,7 @@ export default function PluginDetailModal({ plugin, onClose, onInstall, onUninst
           </div>
           <button
             onClick={onClose}
-            className="rounded p-1 text-neutral-600 transition-colors hover:text-neutral-400"
+            className="rounded p-1 text-faint transition-colors hover:text-tertiary"
           >
             <X className="h-4 w-4" />
           </button>
@@ -73,7 +73,7 @@ export default function PluginDetailModal({ plugin, onClose, onInstall, onUninst
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {/* Description */}
-          <p className="text-[13px] leading-relaxed text-neutral-400">
+          <p className="text-[13px] leading-relaxed text-tertiary">
             {plugin.description || 'No description provided.'}
           </p>
 
@@ -81,7 +81,7 @@ export default function PluginDetailModal({ plugin, onClose, onInstall, onUninst
           {plugin.keywords && plugin.keywords.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-1.5">
               {plugin.keywords.map(kw => (
-                <span key={kw} className="rounded bg-neutral-800/70 px-2 py-0.5 text-[10px] text-neutral-400">
+                <span key={kw} className="rounded bg-elevated/70 px-2 py-0.5 text-[10px] text-tertiary">
                   {kw}
                 </span>
               ))}
@@ -112,7 +112,7 @@ export default function PluginDetailModal({ plugin, onClose, onInstall, onUninst
           {/* Skills */}
           {plugin.skills.length > 0 && (
             <div className="mt-5">
-              <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-neutral-600">
+              <h3 className="mb-2 text-[11px] font-medium uppercase tracking-wider text-faint">
                 Skills ({plugin.skills.length})
               </h3>
               <div className="flex flex-col gap-1">
@@ -161,34 +161,34 @@ function SkillRow({
   }, [expanded, detail, marketplace, pluginName, skillName]);
 
   return (
-    <div className="rounded-lg border border-[#1e1e1e] bg-[#0d0d0d]">
+    <div className="rounded-lg border border-border-default bg-root">
       <button
         onClick={() => setExpanded(v => !v)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
       >
         {expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 text-neutral-600" />
+          <ChevronDown className="h-3 w-3 shrink-0 text-faint" />
         ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 text-neutral-600" />
+          <ChevronRight className="h-3 w-3 shrink-0 text-faint" />
         )}
-        <span className="text-[12px] font-medium text-neutral-300">/{skillName}</span>
-        <span className="min-w-0 flex-1 truncate text-[11px] text-neutral-600">{description}</span>
+        <span className="text-[12px] font-medium text-secondary">/{skillName}</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-faint">{description}</span>
       </button>
 
       {expanded && (
-        <div className="border-t border-[#1e1e1e] px-3 py-2.5">
+        <div className="border-t border-border-default px-3 py-2.5">
           {loading && (
-            <p className="text-[11px] text-neutral-600">Loading...</p>
+            <p className="text-[11px] text-faint">Loading...</p>
           )}
           {detail && (
             <div className="flex flex-col gap-2">
               {/* Allowed tools */}
               {detail.allowedTools && detail.allowedTools.length > 0 && (
                 <div className="flex items-start gap-2">
-                  <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-neutral-600" />
+                  <Wrench className="mt-0.5 h-3 w-3 shrink-0 text-faint" />
                   <div className="flex flex-wrap gap-1">
                     {detail.allowedTools.map(t => (
-                      <span key={t} className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
+                      <span key={t} className="rounded bg-elevated px-1.5 py-0.5 text-[10px] text-tertiary">
                         {t}
                       </span>
                     ))}
@@ -201,15 +201,15 @@ function SkillRow({
                 <div className="flex flex-col gap-1.5">
                   {detail.scope.maxSteps != null && (
                     <div className="flex items-center gap-2">
-                      <Shield className="h-3 w-3 shrink-0 text-neutral-600" />
-                      <span className="text-[10px] text-neutral-500">
+                      <Shield className="h-3 w-3 shrink-0 text-faint" />
+                      <span className="text-[10px] text-muted">
                         Max steps: {detail.scope.maxSteps}
                       </span>
                     </div>
                   )}
                   {detail.scope.allowedCommands && detail.scope.allowedCommands.length > 0 && (
                     <div className="flex items-start gap-2">
-                      <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-neutral-600" />
+                      <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-faint" />
                       <div className="flex flex-wrap gap-1">
                         {detail.scope.allowedCommands.map(c => (
                           <span key={c} className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] text-green-400">
@@ -236,7 +236,7 @@ function SkillRow({
             </div>
           )}
           {!loading && !detail && (
-            <p className="text-[11px] text-neutral-600">Could not load skill details.</p>
+            <p className="text-[11px] text-faint">Could not load skill details.</p>
           )}
         </div>
       )}

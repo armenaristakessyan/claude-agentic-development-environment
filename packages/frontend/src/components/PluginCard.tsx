@@ -25,23 +25,23 @@ export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUn
   return (
     <button
       onClick={onClick}
-      className="group flex w-full flex-col gap-1.5 rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors hover:border-[#1e1e1e] hover:bg-[#111111]"
+      className="group flex w-full flex-col gap-1.5 rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors hover:border-border-default hover:bg-modal"
     >
       {/* Header row */}
       <div className="flex items-center gap-2">
-        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-[#1a1a1a]">
-          <Puzzle className="h-3.5 w-3.5 text-neutral-500" />
+        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded bg-hover">
+          <Puzzle className="h-3.5 w-3.5 text-muted" />
         </div>
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-neutral-200">
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-primary">
           {plugin.name}
         </span>
         {plugin.version && (
-          <span className="shrink-0 text-[10px] text-neutral-600">v{plugin.version}</span>
+          <span className="shrink-0 text-[10px] text-faint">v{plugin.version}</span>
         )}
       </div>
 
       {/* Description */}
-      <p className="line-clamp-2 text-[11px] leading-relaxed text-neutral-500">
+      <p className="line-clamp-2 text-[11px] leading-relaxed text-muted">
         {plugin.description || 'No description'}
       </p>
 
@@ -55,18 +55,18 @@ export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUn
         )}
 
         {/* Marketplace badge */}
-        <span className="rounded bg-neutral-800/50 px-1.5 py-0.5 text-[10px] text-neutral-500">
+        <span className="rounded bg-elevated/50 px-1.5 py-0.5 text-[10px] text-muted">
           {marketplaceLabel(plugin.marketplace)}
         </span>
 
         {/* Skills count */}
-        <span className="text-[10px] text-neutral-600">
+        <span className="text-[10px] text-faint">
           {plugin.skillCount} skill{plugin.skillCount !== 1 ? 's' : ''}
         </span>
 
         {/* Install count */}
         {plugin.installCount != null && plugin.installCount > 0 && (
-          <span className="flex items-center gap-0.5 text-[10px] text-neutral-600">
+          <span className="flex items-center gap-0.5 text-[10px] text-faint">
             <Download className="h-2.5 w-2.5" />
             {formatCount(plugin.installCount)}
           </span>
