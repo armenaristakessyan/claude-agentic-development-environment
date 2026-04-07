@@ -52,8 +52,15 @@ export function setupStreamSocketHandlers(
   });
 
   // Forward real-time content blocks — scoped to instance room
+  // Also broadcast a lightweight activity hint globally (for sidebar last-action display)
   streamProcess.on('content_block', (instanceId: string, block: ContentBlock) => {
     io.to(instanceRoom(instanceId)).emit('chat:content_block', { instanceId, block });
+
+    if (block.type === 'tool_use' && block.name) {
+      const inp = block.input as Record<string, unknown> | null;
+      const detail = inp?.file_path as string ?? inp?.command as string ?? inp?.pattern as string ?? inp?.description as string ?? undefined;
+      io.emit('instance:activity', { instanceId, toolName: block.name, detail });
+    }
   });
 
   // Forward session info — scoped to instance room + persist sessionId + model
@@ -111,6 +118,11 @@ export function setupStreamSocketHandlers(
     io.to(instanceRoom(instanceId)).emit('chat:permission_request', { instanceId, ...data });
   });
 
+  // Forward conversation errors — scoped to instance room
+  streamProcess.on('error', (instanceId: string, error: string) => {
+    io.to(instanceRoom(instanceId)).emit('chat:error', { instanceId, error });
+  });
+
   // Forward exit — broadcast to ALL clients
   streamProcess.on('exited', (instanceId: string, exitCode: number) => {
     io.emit('instance:exited', { instanceId, exitCode });
@@ -160,8 +172,8 @@ export function setupStreamSocketHandlers(
     });
 
     // Client requests message history for an instance
-    socket.on('chat:history', ({ instanceId }: { instanceId: string }) => {
-      const messages = streamProcess.getMessages(instanceId);
+    socket.on('chat:history', async ({ instanceId }: { instanceId: string }) => {
+      const messages = await streamProcess.getSessionHistory(instanceId);
       socket.emit('chat:history', { instanceId, messages });
     });
   });

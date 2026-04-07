@@ -76,9 +76,14 @@ export function createRoutes(
   });
 
   // Get messages for an instance
-  router.get('/api/instances/:id/messages', (req, res) => {
-    const messages = processManager.getMessages(req.params.id);
-    res.json(messages);
+  router.get('/api/instances/:id/messages', async (req, res) => {
+    try {
+      const messages = await processManager.getSessionHistory(req.params.id);
+      res.json(messages);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to load messages';
+      res.status(500).json({ error: message });
+    }
   });
 
   // Send a message to an instance
@@ -109,7 +114,7 @@ export function createRoutes(
   });
 
   router.post('/api/instances', async (req, res) => {
-    const { projectPath, taskDescription } = req.body as { projectPath?: string; taskDescription?: string };
+    const { projectPath, taskDescription, branchName: customBranch } = req.body as { projectPath?: string; taskDescription?: string; branchName?: string };
     if (!projectPath) {
       res.status(400).json({ error: 'projectPath is required' });
       return;
@@ -121,7 +126,7 @@ export function createRoutes(
       let parentProjectPath: string | undefined;
 
       if (taskDescription && worktreeManager.isGitRepo(projectPath)) {
-        const result = worktreeManager.createWorktree(projectPath, taskDescription);
+        const result = worktreeManager.createWorktree(projectPath, taskDescription, customBranch || undefined);
         worktreePath = result.worktreePath;
         branchName = result.branchName;
         parentProjectPath = projectPath;
@@ -457,12 +462,12 @@ export function createRoutes(
       let mainBranch = 'main';
       try {
         // Detect default branch
-        const defaultRef = execSync('git symbolic-ref refs/remotes/origin/HEAD', { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+        const defaultRef = execSync('git symbolic-ref refs/remotes/origin/HEAD', { cwd, encoding: 'utf-8', timeout: 5000, stdio: 'pipe' }).trim();
         mainBranch = defaultRef.replace('refs/remotes/origin/', '');
       } catch {
         // Try master if main doesn't exist
         try {
-          execSync('git rev-parse --verify origin/master', { cwd, encoding: 'utf-8', timeout: 5000 });
+          execSync('git rev-parse --verify origin/master', { cwd, encoding: 'utf-8', timeout: 5000, stdio: 'pipe' });
           mainBranch = 'master';
         } catch { /* keep main */ }
       }
@@ -470,7 +475,7 @@ export function createRoutes(
       let commitsAhead = 0;
       let commitMessages: string[] = [];
       try {
-        const log = execSync(`git log origin/${mainBranch}..HEAD --oneline`, { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+        const log = execSync(`git log origin/${mainBranch}..HEAD --oneline`, { cwd, encoding: 'utf-8', timeout: 5000, stdio: 'pipe' }).trim();
         const lines = log.split('\n').filter(Boolean);
         commitsAhead = lines.length;
         commitMessages = lines.map(l => l.replace(/^[a-f0-9]+ /, ''));
@@ -479,7 +484,7 @@ export function createRoutes(
       // Check if remote tracking branch exists
       let hasRemote = false;
       try {
-        execSync(`git rev-parse --verify origin/${branch}`, { cwd, encoding: 'utf-8', timeout: 5000 });
+        execSync(`git rev-parse --verify origin/${branch}`, { cwd, encoding: 'utf-8', timeout: 5000, stdio: 'pipe' });
         hasRemote = true;
       } catch { /* not pushed yet */ }
 
@@ -487,7 +492,7 @@ export function createRoutes(
       let unpushedCount = 0;
       if (hasRemote) {
         try {
-          const unpushed = execSync(`git log origin/${branch}..HEAD --oneline`, { cwd, encoding: 'utf-8', timeout: 5000 }).trim();
+          const unpushed = execSync(`git log origin/${branch}..HEAD --oneline`, { cwd, encoding: 'utf-8', timeout: 5000, stdio: 'pipe' }).trim();
           unpushedCount = unpushed.split('\n').filter(Boolean).length;
         } catch { /* ignore */ }
       } else {
@@ -622,11 +627,12 @@ export function createRoutes(
           cwd: parentPath,
           encoding: 'utf-8',
           timeout: 5000,
+          stdio: 'pipe',
         }).trim();
         mainBranch = defaultRef.replace('refs/remotes/origin/', '');
       } catch {
         try {
-          execSync('git rev-parse --verify master', { cwd: parentPath, encoding: 'utf-8', timeout: 5000 });
+          execSync('git rev-parse --verify master', { cwd: parentPath, encoding: 'utf-8', timeout: 5000, stdio: 'pipe' });
           mainBranch = 'master';
         } catch { /* keep main */ }
       }
@@ -663,7 +669,6 @@ export function createRoutes(
 
   router.delete('/api/tasks/:id', async (req, res) => {
     try {
-      await taskStore.removeMessages(req.params.id);
       await taskStore.removeTask(req.params.id);
       res.json({ ok: true });
     } catch (err) {
@@ -709,12 +714,6 @@ export function createRoutes(
         permissionMode: task.permissionMode ?? undefined,
       });
 
-      // Copy messages from old task to new task before removing old one
-      const oldMessages = taskStore.loadMessages(task.id);
-      if (oldMessages.length > 0) {
-        await taskStore.saveMessages(instance.id, oldMessages);
-      }
-
       // Update task store with the new instance ID
       await taskStore.addTask({
         id: instance.id,
@@ -734,8 +733,7 @@ export function createRoutes(
         createdAt: new Date().toISOString(),
       });
 
-      // Remove the old task entry + its messages file
-      await taskStore.removeMessages(task.id);
+      // Remove the old task entry
       await taskStore.removeTask(task.id);
 
       res.status(201).json(instance);
@@ -933,7 +931,10 @@ export function createRoutes(
   });
 
   // Slash commands (cached from last session init)
-  router.get('/api/slash-commands', (_req, res) => {
+  router.get('/api/slash-commands', async (req, res) => {
+    if (req.query.refresh) {
+      await processManager.prefetchSlashCommands(true);
+    }
     res.json(processManager.getSlashCommands());
   });
 
@@ -990,8 +991,6 @@ export function createRoutes(
   router.post('/api/instances/:id/clear', async (req, res) => {
     try {
       processManager.clearSession(req.params.id);
-      // Also clear persisted messages
-      await taskStore.saveMessages(req.params.id, []);
       res.json({ ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to clear session';
@@ -1000,6 +999,60 @@ export function createRoutes(
   });
 
   // --- Marketplace ---
+
+  router.get('/api/marketplace/sources', (_req, res) => {
+    try {
+      const sources = marketplace.listMarketplaces();
+      res.json(sources);
+    } catch (err) {
+      console.log('[routes] Error listing marketplace sources:', err);
+      res.status(500).json({ error: 'Failed to list marketplace sources' });
+    }
+  });
+
+  router.post('/api/marketplace/add', async (req, res) => {
+    try {
+      const { repo, autoUpdate } = req.body as { repo?: string; autoUpdate?: boolean };
+      if (!repo || typeof repo !== 'string') {
+        res.status(400).json({ error: 'Missing or invalid "repo" field. Use owner/repo or a full git URL.' });
+        return;
+      }
+      const result = marketplace.addMarketplace(repo, autoUpdate ?? true);
+      res.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to add marketplace';
+      console.log('[routes] Error adding marketplace:', err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.patch('/api/marketplace/:name', (req, res) => {
+    try {
+      const { autoUpdate } = req.body as { autoUpdate?: boolean };
+      if (typeof autoUpdate !== 'boolean') {
+        res.status(400).json({ error: 'Missing or invalid "autoUpdate" field' });
+        return;
+      }
+      marketplace.setAutoUpdate(req.params.name, autoUpdate);
+      res.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update marketplace';
+      console.log('[routes] Error updating marketplace:', err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.delete('/api/marketplace/:name', (req, res) => {
+    try {
+      const deleteFiles = req.query.deleteFiles === 'true';
+      marketplace.removeMarketplace(req.params.name, deleteFiles);
+      res.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to remove marketplace';
+      console.log('[routes] Error removing marketplace:', err);
+      res.status(500).json({ error: message });
+    }
+  });
 
   router.get('/api/marketplace/plugins', (_req, res) => {
     try {

@@ -201,11 +201,18 @@ export default function TaskSidebar({
                     <div className="mt-1.5 flex flex-col gap-1 border-l border-blue-500/20 pl-2.5 ml-0.5">
                       {agents.map(agent => (
                         <div key={agent.taskId} className="flex items-center gap-1.5 text-[10px]">
-                          <Loader className="h-2.5 w-2.5 shrink-0 animate-spin text-blue-300/60" />
-                          <span className="truncate text-blue-300/50">
+                          {agent.status === 'failed' ? (
+                            <X className="h-2.5 w-2.5 shrink-0 text-rose-400/70" />
+                          ) : (
+                            <Loader className="h-2.5 w-2.5 shrink-0 animate-spin text-blue-300/60" />
+                          )}
+                          <span className={`truncate ${agent.status === 'failed' ? 'text-rose-400/50' : 'text-blue-300/50'}`}>
                             {agent.description}
                           </span>
-                          {agent.lastToolName && (
+                          {agent.status === 'failed' && (
+                            <span className="shrink-0 text-rose-500/40">failed</span>
+                          )}
+                          {agent.status !== 'failed' && agent.lastToolName && (
                             <span className="shrink-0 text-neutral-700">
                               → {agent.lastToolName}
                             </span>

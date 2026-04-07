@@ -1,12 +1,35 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { PluginMetadata } from '../types';
 
+export interface MarketplaceSourceInfo {
+  name: string;
+  source: { source: string; repo?: string; url?: string; path?: string };
+  pluginCount: number;
+  lastUpdated: string;
+  autoUpdate: boolean;
+}
+
 export function useMarketplace() {
   const [plugins, setPlugins] = useState<PluginMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [installingPlugins, setInstallingPlugins] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [marketplaceFilter, setMarketplaceFilter] = useState<string | null>(null);
+  const [sources, setSources] = useState<MarketplaceSourceInfo[]>([]);
+  const [addingSource, setAddingSource] = useState(false);
+  const [removingSource, setRemovingSource] = useState<string | null>(null);
+
+  const fetchSources = useCallback(async () => {
+    try {
+      const res = await fetch('/api/marketplace/sources');
+      if (res.ok) {
+        const data = await res.json() as MarketplaceSourceInfo[];
+        setSources(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch marketplace sources:', err);
+    }
+  }, []);
 
   const fetchPlugins = useCallback(async () => {
     setLoading(true);
@@ -25,23 +48,69 @@ export function useMarketplace() {
 
   useEffect(() => {
     fetchPlugins();
-  }, [fetchPlugins]);
+    fetchSources();
+  }, [fetchPlugins, fetchSources]);
 
-  /** Send /reload-plugins to all active instances so Claude picks up changes */
+  const addSource = useCallback(async (repo: string, autoUpdate = true): Promise<{ name: string; pluginCount: number; error?: string }> => {
+    setAddingSource(true);
+    try {
+      const res = await fetch('/api/marketplace/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo, autoUpdate }),
+      });
+      const data = await res.json() as { name?: string; pluginCount?: number; error?: string };
+      if (!res.ok) {
+        return { name: '', pluginCount: 0, error: data.error ?? 'Failed to add marketplace' };
+      }
+      await fetchSources();
+      await fetchPlugins();
+      return { name: data.name ?? repo, pluginCount: data.pluginCount ?? 0 };
+    } catch (err) {
+      console.error('Failed to add marketplace source:', err);
+      return { name: '', pluginCount: 0, error: 'Network error adding marketplace' };
+    } finally {
+      setAddingSource(false);
+    }
+  }, [fetchSources, fetchPlugins]);
+
+  const removeSource = useCallback(async (name: string, deleteFiles = true) => {
+    setRemovingSource(name);
+    try {
+      const res = await fetch(`/api/marketplace/${encodeURIComponent(name)}?deleteFiles=${deleteFiles}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        await fetchSources();
+        await fetchPlugins();
+      }
+    } catch (err) {
+      console.error('Failed to remove marketplace source:', err);
+    } finally {
+      setRemovingSource(null);
+    }
+  }, [fetchSources, fetchPlugins]);
+
+  const toggleAutoUpdate = useCallback(async (name: string, autoUpdate: boolean) => {
+    try {
+      const res = await fetch(`/api/marketplace/${encodeURIComponent(name)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoUpdate }),
+      });
+      if (res.ok) {
+        setSources(prev => prev.map(s => s.name === name ? { ...s, autoUpdate } : s));
+      }
+    } catch (err) {
+      console.error('Failed to toggle autoUpdate:', err);
+    }
+  }, []);
+
+  /** Refresh slash commands cache so the UI picks up plugin changes */
   const reloadPluginsOnInstances = useCallback(async () => {
     try {
-      const res = await fetch('/api/instances');
-      if (!res.ok) return;
-      const instances = await res.json() as { id: string; status: string }[];
-      for (const inst of instances) {
-        if (inst.status === 'waiting_input') {
-          await fetch(`/api/instances/${inst.id}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prompt: '/reload-plugins', hidden: true }),
-          }).catch(() => {});
-        }
-      }
+      // Force backend to re-fetch slash commands from the SDK
+      await fetch('/api/slash-commands?refresh=1');
     } catch { /* ignore */ }
     window.dispatchEvent(new Event('plugins-changed'));
   }, []);
@@ -133,5 +202,11 @@ export function useMarketplace() {
     installingPlugins,
     refreshMarketplace,
     refetch: fetchPlugins,
+    sources,
+    addSource,
+    removeSource,
+    addingSource,
+    removingSource,
+    toggleAutoUpdate,
   };
 }

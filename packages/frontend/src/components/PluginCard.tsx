@@ -78,7 +78,7 @@ export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUn
         {isLoading ? (
           <span className="flex items-center gap-1 rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300">
             <Loader className="h-2.5 w-2.5 animate-spin" />
-            {plugin.isInstalled ? 'Removing...' : 'Installing...'}
+            {plugin.isInstalled ? 'Installing...' : 'Removing...'}
           </span>
         ) : plugin.isInstalled ? (
           <span

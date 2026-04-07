@@ -32,13 +32,17 @@ export class WorktreeManager {
       .slice(0, 30);
   }
 
-  createWorktree(projectPath: string, taskDescription: string): WorktreeResult {
-    const slug = this.slugify(taskDescription);
+  createWorktree(projectPath: string, taskDescription: string, customBranch?: string): WorktreeResult {
+    const slug = customBranch
+      ? customBranch.replace(/^claude\//, '') // strip prefix if user included it
+      : this.slugify(taskDescription);
     if (!slug) {
       throw new Error('Task description produced an empty slug');
     }
 
-    const branchName = `claude/${slug}`;
+    const branchName = customBranch
+      ? (customBranch.startsWith('claude/') ? customBranch : `claude/${customBranch}`)
+      : `claude/${slug}`;
     let worktreePath = `${projectPath}--${slug}`;
 
     // Collision handling: append -2, -3 if path exists

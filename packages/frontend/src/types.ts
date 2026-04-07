@@ -89,9 +89,10 @@ export interface AgentTask {
   taskId: string;
   toolUseId: string;
   description: string;
-  status: 'running' | 'completed';
+  status: 'running' | 'completed' | 'failed';
   lastToolName?: string;
   startedAt: number;
+  failedAt?: number;
   usage?: { total_tokens?: number; tool_uses?: number; duration_ms?: number };
 }
 

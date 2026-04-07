@@ -1,13 +1,14 @@
 import path from 'path';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, getSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import type {
   Query,
   SDKMessage,
   SDKUserMessage,
   CanUseTool,
   PermissionResult,
+  SessionMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { BetaContentBlock } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import type { AppConfig } from './config.js';
@@ -252,12 +253,18 @@ export class StreamProcessManager extends EventEmitter {
     this.handles.set(id, handle);
     this.emit('status', id, INSTANCE_STATUS.WAITING_INPUT);
 
-    // On resume, load saved messages from disk
-    if (options.continueSession && options.sessionId && this.taskStore) {
-      const savedMessages = this.taskStore.loadMessagesBySessionId(options.sessionId) as ChatMessage[];
-      if (savedMessages.length > 0) {
-        instance.messages = savedMessages;
-        console.log(`[stream-process] Loaded ${savedMessages.length} messages from history`);
+    // On resume, load messages from SDK session history
+    if (options.continueSession && options.sessionId) {
+      try {
+        const cwd = instance.worktreePath ?? instance.projectPath;
+        const sdkMessages = await getSessionMessages(options.sessionId, { dir: cwd });
+        const mapped = this.mapSessionMessages(sdkMessages);
+        if (mapped.length > 0) {
+          instance.messages = mapped;
+          console.log(`[stream-process] Loaded ${mapped.length} messages from SDK session`);
+        }
+      } catch (err) {
+        console.log(`[stream-process] Failed to load SDK session history: ${err}`);
       }
     }
 
@@ -501,13 +508,6 @@ export class StreamProcessManager extends EventEmitter {
             assistantBlocks = [];
           }
 
-          // Persist messages to disk
-          if (this.taskStore && instance.messages.length > 0) {
-            this.taskStore.saveMessages(instanceId, instance.messages).catch(err => {
-              console.log(`[stream-process] Failed to persist messages: ${err}`);
-            });
-          }
-
           instance.status = INSTANCE_STATUS.WAITING_INPUT;
           instance.lastActivity = new Date();
           this.emit('status', instanceId, INSTANCE_STATUS.WAITING_INPUT);
@@ -517,7 +517,9 @@ export class StreamProcessManager extends EventEmitter {
       if (err instanceof Error && err.name === 'AbortError') {
         console.log(`[stream-process] Conversation aborted for ${instanceId}`);
       } else {
-        console.log(`[stream-process] Conversation error for ${instanceId}:`, err);
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[stream-process] Conversation error for ${instanceId}:`, errorMsg);
+        this.emit('error', instanceId, errorMsg);
       }
     }
 
@@ -535,13 +537,6 @@ export class StreamProcessManager extends EventEmitter {
         instance.messages.push(chatMsg);
         this.emit('message', instanceId, chatMsg);
       }
-    }
-
-    // Final persist
-    if (this.taskStore && instance.messages.length > 0) {
-      this.taskStore.saveMessages(instanceId, instance.messages).catch(err => {
-        console.log(`[stream-process] Failed to persist messages: ${err}`);
-      });
     }
 
     // Conversation has ended (closed, killed, or errored) — clean up
@@ -970,6 +965,94 @@ export class StreamProcessManager extends EventEmitter {
       };
       this.on('status', onStatus);
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Session history — read from SDK JSONL files
+  // -------------------------------------------------------------------------
+
+  /**
+   * Load message history from the SDK session files.
+   * Falls back to in-memory messages for live instances.
+   */
+  async getSessionHistory(instanceId: string): Promise<ChatMessage[]> {
+    const handle = this.handles.get(instanceId);
+    if (!handle) return [];
+
+    const instance = handle.instance;
+
+    // If there are in-memory messages (live session), return those
+    if (instance.messages.length > 0) {
+      return [...instance.messages];
+    }
+
+    // Otherwise read from SDK session JSONL
+    if (!instance.sessionId) return [];
+
+    try {
+      const cwd = instance.worktreePath ?? instance.projectPath;
+      const sdkMessages = await getSessionMessages(instance.sessionId, { dir: cwd });
+      const mapped = this.mapSessionMessages(sdkMessages);
+      // Cache into instance so subsequent calls are fast
+      instance.messages = mapped;
+      return mapped;
+    } catch (err) {
+      console.log(`[stream-process] Failed to load session history for ${instanceId}:`, err);
+      return [];
+    }
+  }
+
+  /**
+   * Map SDK SessionMessage[] to our ChatMessage[] format.
+   * Groups adjacent assistant blocks into single messages.
+   */
+  private mapSessionMessages(sdkMessages: SessionMessage[]): ChatMessage[] {
+    const result: ChatMessage[] = [];
+
+    for (const msg of sdkMessages) {
+      if (msg.type === 'system') continue;
+
+      const raw = msg.message as Record<string, unknown> | undefined;
+      if (!raw) continue;
+
+      const role = msg.type as 'user' | 'assistant';
+      const rawContent = raw.content;
+
+      const blocks: ContentBlock[] = [];
+
+      if (typeof rawContent === 'string') {
+        blocks.push({ type: 'text', text: rawContent });
+      } else if (Array.isArray(rawContent)) {
+        for (const block of rawContent) {
+          const b = block as Record<string, unknown>;
+          if (b.type === 'text') {
+            blocks.push({ type: 'text', text: b.text as string });
+          } else if (b.type === 'thinking') {
+            blocks.push({ type: 'thinking', thinking: b.thinking as string });
+          } else if (b.type === 'tool_use') {
+            blocks.push({
+              type: 'tool_use',
+              tool_use_id: b.id as string,
+              name: b.name as string,
+              input: b.input,
+            });
+          } else if (b.type === 'tool_result') {
+            blocks.push({
+              type: 'tool_result',
+              tool_use_id: b.tool_use_id as string,
+              content: typeof b.content === 'string' ? b.content : JSON.stringify(b.content),
+              is_error: b.is_error as boolean | undefined,
+            });
+          }
+        }
+      }
+
+      if (blocks.length > 0) {
+        result.push({ role, content: blocks, timestamp: '' });
+      }
+    }
+
+    return result;
   }
 
   // -------------------------------------------------------------------------

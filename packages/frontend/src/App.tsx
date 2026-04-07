@@ -75,6 +75,22 @@ export default function App() {
           };
         }
         if (evt === 'completed') {
+          const agentStatus = (data.status === 'error' || data.status === 'failed') ? 'failed' as const : 'completed' as const;
+          if (agentStatus === 'failed') {
+            // Show failed state for 10s, then remove
+            setTimeout(() => {
+              setAgentTasks(p => ({
+                ...p,
+                [instanceId]: (p[instanceId] ?? []).filter(a => a.taskId !== taskId),
+              }));
+            }, 10000);
+            return {
+              ...prev,
+              [instanceId]: current.map(a =>
+                a.taskId === taskId ? { ...a, status: 'failed', description: description ?? a.description, failedAt: Date.now() } : a,
+              ),
+            };
+          }
           return {
             ...prev,
             [instanceId]: current.filter(a => a.taskId !== taskId),
@@ -114,9 +130,9 @@ export default function App() {
     [queue],
   );
 
-  const handleLaunch = useCallback(async (projectPath: string, taskDescription?: string) => {
+  const handleLaunch = useCallback(async (projectPath: string, taskDescription?: string, branchName?: string) => {
     try {
-      const instance = await spawnInstance(projectPath, taskDescription);
+      const instance = await spawnInstance(projectPath, taskDescription, branchName);
       setSelectedInstanceId(instance.id);
       setNewTaskOpen(false);
       fetchTasks();
@@ -375,6 +391,7 @@ export default function App() {
               initialPermissionMode={selectedInstance.permissionMode}
               draft={drafts[selectedInstance.id] ?? ''}
               onDraftChange={handleDraftChange}
+              rateLimitInfo={rateLimitInfo}
             />
           ) : (
             <div className="flex h-full items-center justify-center">
