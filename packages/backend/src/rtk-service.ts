@@ -129,12 +129,13 @@ export class RtkService {
     if (!output) return null;
     try {
       const data = JSON.parse(output) as Record<string, unknown>;
-      const totalTokensSaved = (data.tokens_saved as number) ?? (data.total_tokens_saved as number) ?? 0;
-      const totalTokensOriginal = (data.tokens_original as number) ?? (data.total_tokens_original as number) ?? 0;
+      const summary = (data.summary ?? data) as Record<string, unknown>;
+      const totalTokensSaved = (summary.total_saved as number) ?? (summary.tokens_saved as number) ?? (summary.total_tokens_saved as number) ?? 0;
+      const totalTokensOriginal = (summary.total_input as number) ?? (summary.tokens_original as number) ?? (summary.total_tokens_original as number) ?? 0;
       const savingsPercent = totalTokensOriginal > 0
         ? Math.round((totalTokensSaved / totalTokensOriginal) * 100)
-        : (data.savings_percent as number) ?? 0;
-      const commandCount = (data.command_count as number) ?? (data.total_commands as number) ?? 0;
+        : (summary.avg_savings_pct as number) ?? (summary.savings_percent as number) ?? 0;
+      const commandCount = (summary.total_commands as number) ?? (summary.command_count as number) ?? 0;
       return { totalTokensSaved, totalTokensOriginal, savingsPercent, commandCount, raw: data };
     } catch {
       return null;

@@ -331,9 +331,6 @@ export default function App() {
                   {' '}Resets {new Date(rateLimitInfo.resetsAt * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}.
                 </span>
               )}
-              {rateLimitInfo.rateLimitType && (
-                <span className="text-amber-500/50">({rateLimitInfo.rateLimitType})</span>
-              )}
             </span>
           )}
           {queue.length > 0 && (
@@ -506,7 +503,7 @@ function NewTaskPicker({
   onClose,
 }: {
   projects: Project[];
-  onLaunch: (projectPath: string, taskDescription?: string) => void;
+  onLaunch: (projectPath: string, taskDescription?: string, branchName?: string) => void;
   onClose: () => void;
 }) {
   const [filter, setFilter] = useState('');

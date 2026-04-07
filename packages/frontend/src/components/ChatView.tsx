@@ -156,15 +156,32 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   const [processingPhase, setProcessingPhase] = useState<'connecting' | 'thinking' | 'working' | 'streaming' | null>(null);
 
   // P0-C: Staleness timer — if no streaming activity for 30s while "sending", reset
+  // But only if there's no pending permission/question (those legitimately pause streaming)
   const stalenessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resetStalenessTimer = useCallback(() => {
     if (stalenessTimerRef.current) clearTimeout(stalenessTimerRef.current);
     stalenessTimerRef.current = setTimeout(() => {
-      setSending(false);
-      setProcessingPhase(null);
-      setToolProgress(null);
+      // Before resetting, verify the backend isn't actually waiting for user input
+      fetch(`/api/instances/${instanceId}/pending`)
+        .then(r => r.ok ? r.json() as Promise<{ pendingPermission: unknown; pendingUserQuestion: unknown }> : null)
+        .then(state => {
+          if (state?.pendingPermission || state?.pendingUserQuestion) {
+            // Still waiting for user — don't reset, but re-emit the pending state
+            // (the socket join handler should have already done this)
+            return;
+          }
+          setSending(false);
+          setProcessingPhase(null);
+          setToolProgress(null);
+        })
+        .catch(() => {
+          // On fetch failure, reset anyway to avoid permanent stuck state
+          setSending(false);
+          setProcessingPhase(null);
+          setToolProgress(null);
+        });
     }, 30_000);
-  }, []);
+  }, [instanceId]);
   const clearStalenessTimer = useCallback(() => {
     if (stalenessTimerRef.current) {
       clearTimeout(stalenessTimerRef.current);
@@ -296,6 +313,13 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     const onResult = ({ instanceId: id, costUsd, durationMs, stopReason }: { instanceId: string; costUsd: number; durationMs: number; stopReason?: string }) => {
       if (id !== instanceId) return;
       setSending(false);
+      // Belt-and-suspenders: ensure streaming state is fully cleared on turn end.
+      // onMessage already resets, but if timing is off this guarantees cleanup.
+      setStreamingBlocks([]);
+      setStreamingText('');
+      deltaBufferRef.current = '';
+      setThinkingText('');
+      thinkingBufferRef.current = '';
       setToolProgress(null);
       setProcessingPhase(null);
       setLastError(null); // Clear any previous error on success
@@ -413,13 +437,19 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       resetStalenessTimer(); // P0-C: activity detected
     };
 
-    // P0-A + P0-C: Reconnection recovery — re-fetch messages + status
+    // P0-A + P0-C: Reconnection recovery — re-fetch messages + status + pending state
     const onConnect = () => {
       socket.emit('instance:join', { instanceId });
-      // Re-fetch authoritative state after reconnect
+      // Re-fetch authoritative state after reconnect — only update if the
+      // server has MORE messages than we have locally (avoids replacing live
+      // streaming content with stale data that doesn't include in-progress turns)
       fetch(`/api/instances/${instanceId}/messages`)
         .then(r => r.ok ? r.json() as Promise<ChatMessage[]> : null)
-        .then(msgs => { if (msgs) setMessages(msgs); })
+        .then(msgs => {
+          if (msgs) {
+            setMessages(prev => msgs.length >= prev.length ? msgs : prev);
+          }
+        })
         .catch(() => {});
       // Check if still processing — reset sending flag if not
       fetch(`/api/instances`)
@@ -429,6 +459,35 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
           if (inst && inst.status !== 'processing') {
             setSending(false);
             resetStreamingState();
+          } else if (inst && inst.status === 'processing') {
+            // Still processing — make sure sending state is active
+            setSending(true);
+          }
+        })
+        .catch(() => {});
+      // Re-fetch pending permission/question state (socket re-emit also
+      // handles this, but the REST fallback ensures robustness)
+      fetch(`/api/instances/${instanceId}/pending`)
+        .then(r => r.ok ? r.json() as Promise<{
+          pendingPermission: { toolName: string; toolInput: unknown; toolUseId: string } | null;
+          pendingUserQuestion: { toolUseId: string; questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; allowMultiple?: boolean }> } | null;
+        }> : null)
+        .then(state => {
+          if (!state) return;
+          if (state.pendingPermission) {
+            setPermissionQueue(prev => {
+              // Avoid duplicates
+              if (prev.some(p => p.toolUseId === state.pendingPermission!.toolUseId)) return prev;
+              return [...prev, state.pendingPermission!];
+            });
+            setSending(true);
+          }
+          if (state.pendingUserQuestion) {
+            setPendingQuestion(prev => {
+              if (prev?.toolUseId === state.pendingUserQuestion!.toolUseId) return prev;
+              return state.pendingUserQuestion;
+            });
+            setSending(true);
           }
         })
         .catch(() => {});
@@ -481,27 +540,38 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     };
   }, [instanceId, socket, resetStreamingState, resetStalenessTimer, clearStalenessTimer]);
 
-  // Smart auto-scroll via IntersectionObserver on the sentinel element.
-  // If the sentinel (messagesEndRef) is visible, the user is at the bottom — auto-scroll.
-  // If the user scrolled up so the sentinel is out of view, don't fight them.
+  // Scroll-position-based auto-scroll — more robust than IntersectionObserver
+  // which can get "unlocked" during layout shifts (streaming → final transition).
   const isAtBottomRef = useRef(true);
+  const scrollRafRef = useRef<number | null>(null);
 
+  // Track whether user is near bottom on every scroll event
   useEffect(() => {
-    const sentinel = messagesEndRef.current;
-    if (!sentinel) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => { isAtBottomRef.current = entry.isIntersecting; },
-      { root: scrollContainerRef.current, threshold: 0.1 },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      // 150px threshold — generous enough to survive layout shifts
+      isAtBottomRef.current =
+        container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+    };
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => container.removeEventListener('scroll', onScroll);
   }, []);
 
-  // Auto-scroll on new content
+  // Auto-scroll on new content — debounced via rAF to avoid thrashing
   useEffect(() => {
     if (!isAtBottomRef.current) return;
-    messagesEndRef.current?.scrollIntoView({ block: 'end' });
-  }, [messages, streamingBlocks, streamingText]);
+    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const container = scrollContainerRef.current;
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+        // Re-mark as at bottom after programmatic scroll
+        isAtBottomRef.current = true;
+      }
+    });
+  }, [messages, streamingBlocks, streamingText, thinkingText]);
 
   // Add a system message locally
 
@@ -817,11 +887,6 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     }
   }, [setInput]);
 
-  // Separate streaming blocks into tools and text
-  const streamingTools = streamingBlocks.filter(b => b.type === 'tool_use');
-  const streamingTextBlocks = streamingBlocks.filter(b => b.type === 'text');
-
-
   return (
     <div className="flex h-full flex-col">
       {/* Session info bar */}
@@ -873,11 +938,10 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             <MessageBubble key={`${msg.role}-${msg.timestamp}-${i}`} message={msg} />
           ))}
 
-          {/* Live streaming — single "Working" block */}
+          {/* Live streaming — chronological block rendering */}
           {(isProcessing || streamingBlocks.length > 0 || streamingText) && (
             <LiveWorkingBlock
-              tools={streamingTools}
-              textBlocks={streamingTextBlocks}
+              blocks={streamingBlocks}
               isProcessing={isProcessing}
               streamingText={streamingText}
               thinkingText={thinkingText}
@@ -1103,15 +1167,6 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             </div>
           )}
 
-          {/* Rate limit warning */}
-          {rateLimitInfo && rateLimitInfo.status !== 'allowed' && (
-            <div className="flex items-center gap-1.5 rounded-md bg-amber-950/30 px-2.5 py-1 mt-2 text-[11px] text-amber-300/70">
-              <AlertTriangleIcon className="h-3 w-3 shrink-0" />
-              <span>Rate limited</span>
-              {rateLimitInfo.resetsAt && <RateLimitCountdown resetsAt={rateLimitInfo.resetsAt} />}
-            </div>
-          )}
-
           {/* Textarea row */}
           <div className="flex items-center gap-2 pt-3 pb-2">
             {/* + context button */}
@@ -1240,12 +1295,8 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || status === 'exited' || (rateLimitInfo != null && rateLimitInfo.status !== 'allowed')}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1 text-[12px] transition-colors disabled:opacity-30 ${
-                  rateLimitInfo && rateLimitInfo.status !== 'allowed'
-                    ? 'text-amber-500/50 cursor-not-allowed'
-                    : 'text-muted hover:bg-hover hover:text-secondary'
-                }`}
+                disabled={!input.trim() || status === 'exited'}
+                className="flex items-center gap-1.5 rounded-lg px-3 py-1 text-[12px] transition-colors disabled:opacity-30 text-muted hover:bg-hover hover:text-secondary"
               >
                 <span>Send</span>
                 <CornerDownLeft className="h-3 w-3" />
@@ -1260,132 +1311,76 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
 
 // --- Tool actions header: shows last action label when processing ---
 
-function ToolActionsHeader({ tools, isProcessing, expanded, onToggle }: {
-  tools: ContentBlock[];
-  isProcessing: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const toolCount = tools.length;
-  const lastTool = tools[toolCount - 1];
-  const lastToolInfo = lastTool ? getToolInfo(lastTool.name ?? 'Unknown', lastTool.input, true) : null;
-  const LastIcon = lastToolInfo?.icon;
-
-  return (
-    <div>
-      <button
-        onClick={onToggle}
-        className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-tertiary"
-      >
-        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        {isProcessing && lastToolInfo && LastIcon ? (
-          <LastIcon className="h-4 w-4 animate-pulse text-blue-300" />
-        ) : isProcessing ? (
-          <Loader className="h-4 w-4 animate-spin text-blue-300" />
-        ) : null}
-        <span>
-          {isProcessing
-            ? lastToolInfo
-              ? <><span className="text-blue-300/80">{lastToolInfo.label}</span>{toolCount > 1 && <span className="ml-1 text-faint">+{toolCount - 1}</span>}</>
-              : 'Processing...'
-            : `Processed (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})`
-          }
-        </span>
-      </button>
-
-      {expanded && toolCount > 0 && (
-        <div className="ml-5 mt-1.5 space-y-1.5 border-l border-border-default pl-3">
-          {tools.map((tool, i) => (
-            <ToolLine
-              key={i}
-              name={tool.name ?? 'Unknown'}
-              input={tool.input}
-              isLive={isProcessing}
-              isLast={i === toolCount - 1}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// --- Live "Working" block shown during processing ---
+// --- Live "Working" block shown during processing (chronological order) ---
 
 function LiveWorkingBlock({
-  tools,
-  textBlocks,
+  blocks,
   isProcessing,
   streamingText,
   thinkingText,
   toolProgress,
   processingPhase,
 }: {
-  tools: ContentBlock[];
-  textBlocks: ContentBlock[];
+  blocks: ContentBlock[];
   isProcessing: boolean;
   streamingText: string;
   thinkingText: string;
   toolProgress: { toolName: string; elapsedSeconds: number } | null;
   processingPhase: 'connecting' | 'thinking' | 'working' | 'streaming' | null;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [thinkingExpanded, setThinkingExpanded] = useState(false);
-  const toolCount = tools.length;
   const hasStreamingText = streamingText.length > 0;
   const hasThinking = thinkingText.length > 0;
   const isActivelyThinking = processingPhase === 'thinking';
   const isConnecting = processingPhase === 'connecting';
-  const thinkingDone = hasThinking && !isActivelyThinking;
+  const blockCount = blocks.length;
+
+  // Group completed blocks chronologically (same logic as finalized messages)
+  const groups = groupContentBlocks(blocks);
+
+  // Determine whether the live thinkingText is already represented in a
+  // completed thinking block (avoid rendering it twice).
+  const lastThinkingGroup = [...groups].reverse().find(g => g.type === 'thinking');
+  const liveThinkingIsNew = hasThinking && (
+    !lastThinkingGroup || (lastThinkingGroup as { thinking: string }).thinking !== thinkingText
+  );
 
   return (
     <div className="space-y-3">
       {/* Connecting indicator — shown before any content arrives */}
-      {isConnecting && !hasThinking && !hasStreamingText && toolCount === 0 && (
+      {isConnecting && !hasThinking && !hasStreamingText && blockCount === 0 && (
         <div className="flex items-center gap-2 text-[13px] text-muted">
           <Loader className="h-3 w-3 animate-spin text-blue-300" />
           <span>Connecting...</span>
         </div>
       )}
 
-      {/* Thinking block — collapsible */}
-      {hasThinking && (
-        <div>
-          <button
-            onClick={() => setThinkingExpanded(!thinkingExpanded)}
-            className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-tertiary"
-          >
-            {thinkingExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-            <BrainIcon className="h-3.5 w-3.5 text-violet-400" />
-            <span className="text-violet-400/80">
-              {isActivelyThinking ? 'Thinking...' : 'Thought process'}
-            </span>
-            {isActivelyThinking && (
-              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
-            )}
-            {thinkingDone && isProcessing && (
-              <Check className="h-3 w-3 text-violet-400/50" />
-            )}
-          </button>
-          {thinkingExpanded && (
-            <div className="ml-5 mt-1.5 max-h-48 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 px-3 py-2">
-              <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted">{thinkingText}</p>
-            </div>
-          )}
-        </div>
+      {/* Render completed groups in chronological order */}
+      {groups.map((group, i) => {
+        const isLastGroup = i === groups.length - 1;
+
+        if (group.type === 'thinking') {
+          return <LiveThinkingBlock key={`g-${i}`} thinking={group.thinking} done={!isActivelyThinking || !isLastGroup} />;
+        }
+
+        if (group.type === 'tool_group') {
+          // Last tool group is "live" if still processing and no streaming text after it
+          const isLive = isLastGroup && isProcessing && !hasStreamingText;
+          return <LiveToolGroup key={`g-${i}`} tools={group.tools} isLive={isLive} />;
+        }
+
+        if (group.type === 'text') {
+          return <TextBlock key={`g-${i}`} text={group.text} />;
+        }
+
+        return null;
+      })}
+
+      {/* Live thinking — only if actively thinking and not already in a completed group */}
+      {liveThinkingIsNew && (
+        <LiveThinkingBlock thinking={thinkingText} done={!isActivelyThinking} />
       )}
 
-      {/* Tool actions header — shows last action when processing */}
-      {(toolCount > 0 || (isProcessing && !hasStreamingText && !hasThinking && !isConnecting)) && (
-        <ToolActionsHeader
-          tools={tools}
-          isProcessing={isProcessing}
-          expanded={expanded}
-          onToggle={() => setExpanded(!expanded)}
-        />
-      )}
-
-      {/* Tool progress indicator ��� real-time elapsed time during long tool runs */}
+      {/* Tool progress indicator — real-time elapsed time during long tool runs */}
       {toolProgress && isProcessing && (
         <div className="flex items-center gap-2 text-[12px] text-faint">
           <ToolProgressRing seconds={toolProgress.elapsedSeconds} />
@@ -1408,10 +1403,95 @@ function LiveWorkingBlock({
         </div>
       )}
 
-      {/* Completed text blocks (fallback if no streaming deltas) */}
-      {!hasStreamingText && textBlocks.map((block, i) => (
-        <TextBlock key={`st-${i}`} text={block.text ?? ''} />
-      ))}
+      {/* Processing indicator when no content has appeared yet */}
+      {isProcessing && blockCount === 0 && !hasStreamingText && !hasThinking && !isConnecting && (
+        <div className="flex items-center gap-2 text-[13px] text-neutral-500">
+          <Loader className="h-4 w-4 animate-spin text-blue-300" />
+          <span>Processing...</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Live thinking block — collapsible, shown during streaming */
+function LiveThinkingBlock({ thinking, done }: { thinking: string; done: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        <BrainIcon className="h-3.5 w-3.5 text-violet-400" />
+        <span className="text-violet-400/80">
+          {done ? 'Thought process' : 'Thinking...'}
+        </span>
+        {!done && (
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+        )}
+        {done && (
+          <Check className="h-3 w-3 text-violet-400/50" />
+        )}
+      </button>
+      {expanded && (
+        <div className="ml-5 mt-1.5 max-h-48 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 px-3 py-2">
+          <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-500">{thinking}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Live tool group — shown during streaming with live/completed styling */
+function LiveToolGroup({ tools, isLive }: { tools: ToolEntry[]; isLive: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const toolCount = tools.length;
+  const lastTool = tools[toolCount - 1];
+  const lastToolInfo = lastTool ? getToolInfo(lastTool.name, lastTool.input, isLive) : null;
+  const LastIcon = lastToolInfo?.icon;
+  const hasErrors = tools.some(t => t.result?.is_error);
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
+      >
+        {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {isLive && lastToolInfo && LastIcon ? (
+          <LastIcon className="h-4 w-4 animate-pulse text-blue-300" />
+        ) : isLive ? (
+          <Loader className="h-4 w-4 animate-spin text-blue-300" />
+        ) : hasErrors ? (
+          <AlertTriangleIcon className="h-3 w-3 text-amber-300/70" />
+        ) : (
+          <Check className="h-3 w-3 text-emerald-300" />
+        )}
+        <span>
+          {isLive
+            ? lastToolInfo
+              ? <><span className="text-blue-300/80">{lastToolInfo.label}</span>{toolCount > 1 && <span className="ml-1 text-neutral-600">+{toolCount - 1}</span>}</>
+              : 'Processing...'
+            : `Processed (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})`
+          }
+        </span>
+      </button>
+      {expanded && toolCount > 0 && (
+        <div className="ml-5 mt-1.5 space-y-1.5 border-l border-[#1e1e1e] pl-3">
+          {tools.map((tool, i) => (
+            <ToolLine
+              key={i}
+              name={tool.name}
+              input={tool.input}
+              result={tool.result}
+              isLive={isLive}
+              isLast={i === toolCount - 1}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

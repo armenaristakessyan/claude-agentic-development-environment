@@ -133,8 +133,27 @@ export function setupStreamSocketHandlers(
 
   io.on('connection', (socket: Socket) => {
     // Client joins an instance room (to receive scoped events)
+    // Re-emit any pending permission request or user question so the
+    // frontend picks it up after a page reload or reconnect.
     socket.on('instance:join', ({ instanceId }: { instanceId: string }) => {
       socket.join(instanceRoom(instanceId));
+
+      // Re-emit in-progress streaming blocks so the frontend can restore
+      // thinking/tool progress when switching back to a processing tab
+      const blocks = streamProcess.getStreamingBlocks(instanceId);
+      if (blocks.length > 0) {
+        for (const block of blocks) {
+          socket.emit('chat:content_block', { instanceId, block });
+        }
+      }
+
+      const { pendingPermission, pendingUserQuestion } = streamProcess.getPendingState(instanceId);
+      if (pendingPermission) {
+        socket.emit('chat:permission_request', { instanceId, ...pendingPermission });
+      }
+      if (pendingUserQuestion) {
+        socket.emit('chat:user_question', { instanceId, ...pendingUserQuestion });
+      }
     });
 
     // Client leaves an instance room

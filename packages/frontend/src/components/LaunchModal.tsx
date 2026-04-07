@@ -31,7 +31,7 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
   // Auto-fill branch name from task description (unless user edited it manually)
   useEffect(() => {
     if (!branchTouched && taskDescription.trim()) {
-      setBranchName(`claude/${slugify(taskDescription)}`);
+      setBranchName(slugify(taskDescription));
     } else if (!branchTouched && !taskDescription.trim()) {
       setBranchName('');
     }

@@ -17,7 +17,7 @@ interface SidebarProps {
   scanPaths: string[];
   selectedInstanceId?: string | null;
   onRefreshProjects: () => void;
-  onLaunchProject: (projectPath: string, taskDescription?: string) => void;
+  onLaunchProject: (projectPath: string, taskDescription?: string, branchName?: string) => void;
   onDeleteWorktree: (projectPath: string, worktreePath: string) => void;
   onOpenScanPaths: () => void;
   onOpenTaskChanges?: (instanceId: string) => void;
