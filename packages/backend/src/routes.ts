@@ -114,7 +114,9 @@ export function createRoutes(
   });
 
   router.post('/api/instances', async (req, res) => {
-    const { projectPath, taskDescription, branchName: customBranch } = req.body as { projectPath?: string; taskDescription?: string; branchName?: string };
+    const { projectPath, taskDescription, branchName: customBranch, useWorktree } = req.body as {
+      projectPath?: string; taskDescription?: string; branchName?: string; useWorktree?: boolean;
+    };
     if (!projectPath) {
       res.status(400).json({ error: 'projectPath is required' });
       return;
@@ -125,7 +127,7 @@ export function createRoutes(
       let branchName: string | undefined;
       let parentProjectPath: string | undefined;
 
-      if (taskDescription && worktreeManager.isGitRepo(projectPath)) {
+      if (taskDescription && useWorktree !== false && worktreeManager.isGitRepo(projectPath)) {
         const result = worktreeManager.createWorktree(projectPath, taskDescription, customBranch || undefined);
         worktreePath = result.worktreePath;
         branchName = result.branchName;

@@ -14,7 +14,7 @@ function slugify(text: string): string {
 
 interface LaunchModalProps {
   project: Project;
-  onLaunch: (projectPath: string, taskDescription?: string, branchName?: string) => void;
+  onLaunch: (projectPath: string, taskDescription?: string, branchName?: string, useWorktree?: boolean) => void;
   onClose: () => void;
 }
 
@@ -22,6 +22,7 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
   const [taskDescription, setTaskDescription] = useState('');
   const [branchName, setBranchName] = useState('');
   const [branchTouched, setBranchTouched] = useState(false);
+  const [useWorktree, setUseWorktree] = useState(true);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -42,7 +43,7 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
   const handleSubmit = () => {
     const desc = taskDescription.trim();
     const branch = branchName.trim() || undefined;
-    onLaunch(project.path, desc || undefined, isGit && desc ? branch : undefined);
+    onLaunch(project.path, desc || undefined, isGit && desc && useWorktree ? branch : undefined, isGit ? useWorktree : undefined);
     onClose();
   };
 
@@ -85,19 +86,29 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
 
         {/* Body */}
         <div className="px-5 py-4">
-          {/* Project info badge */}
+          {/* Project info badge with worktree toggle */}
           <div className="mb-4 flex items-center gap-2 rounded-lg bg-root px-3 py-2 text-[12px] text-muted">
             {isGit ? (
               <>
-                <GitBranch className="h-3 w-3 text-faint" />
+                <GitBranch className="h-3 w-3 shrink-0 text-faint" />
                 <span>{project.gitBranch}</span>
-                <span className="text-faint">--</span>
-                <span className="text-faint">worktree + branch will be created</span>
+                <span className="text-faint">—</span>
+                <span className="flex-1 text-faint">{useWorktree ? 'worktree + branch will be created' : 'will run on current branch'}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={useWorktree}
+                  title={useWorktree ? 'Worktree enabled — task runs in an isolated copy' : 'Worktree disabled — task runs on the current branch'}
+                  onClick={() => setUseWorktree(prev => !prev)}
+                  className={`relative ml-1 inline-flex h-4 w-7 shrink-0 cursor-pointer items-center rounded-full transition-colors ${useWorktree ? 'bg-green-600/80' : 'bg-elevated'}`}
+                >
+                  <span className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${useWorktree ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+                </button>
               </>
             ) : (
               <>
                 <Folder className="h-3 w-3 text-faint" />
-                <span className="text-faint">Not a git project -- will launch directly</span>
+                <span className="text-faint">Not a git project — will launch directly</span>
               </>
             )}
           </div>
@@ -113,8 +124,8 @@ export default function LaunchModal({ project, onLaunch, onClose }: LaunchModalP
             className="w-full resize-none rounded-lg border border-border-input bg-root px-3 py-2.5 text-[14px] text-secondary placeholder-placeholder outline-none transition-colors focus:border-border-focus"
           />
 
-          {/* Branch name — only for git projects with a task description */}
-          {isGit && taskDescription.trim() && (
+          {/* Branch name — only for git projects with worktree enabled and a task description */}
+          {isGit && useWorktree && taskDescription.trim() && (
             <div className="mt-3">
               <label className="mb-1 flex items-center gap-1.5 text-[11px] text-faint">
                 <GitBranch className="h-3 w-3" />
