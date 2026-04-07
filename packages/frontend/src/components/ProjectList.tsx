@@ -109,7 +109,7 @@ interface ProjectListProps {
   loading: boolean;
   scanPaths: string[];
   selectedRoot: string | null;
-  onLaunch: (projectPath: string, taskDescription?: string) => void;
+  onLaunch: (projectPath: string, taskDescription?: string, branchName?: string) => void;
   onDeleteWorktree: (projectPath: string, worktreePath: string) => void;
 }
 
@@ -185,9 +185,9 @@ export default function ProjectList({ projects, instances, loading, scanPaths, s
     });
   }, []);
 
-  const handleLaunchFromModal = (projectPath: string, taskDescription?: string) => {
+  const handleLaunchFromModal = (projectPath: string, taskDescription?: string, branchName?: string) => {
     setLaunching(projectPath);
-    onLaunch(projectPath, taskDescription);
+    onLaunch(projectPath, taskDescription, branchName);
     setTimeout(() => setLaunching(null), 1000);
   };
 
