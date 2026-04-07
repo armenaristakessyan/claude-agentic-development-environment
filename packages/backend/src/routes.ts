@@ -792,6 +792,14 @@ export function createRoutes(
     }
   });
 
+  // Get pending permission request or user question for an instance
+  // (used by frontend after reconnect to recover stalled UI)
+  router.get('/api/instances/:id/pending', (req, res) => {
+    const instance = processManager.get(req.params.id);
+    if (!instance) { res.status(404).json({ error: 'Instance not found' }); return; }
+    res.json(processManager.getPendingState(req.params.id));
+  });
+
   // Read permissions from all scopes for an instance
   router.get('/api/instances/:id/permissions', (req, res) => {
     const instance = processManager.get(req.params.id);

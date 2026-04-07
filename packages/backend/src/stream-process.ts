@@ -125,6 +125,8 @@ interface ProcessHandle {
   pendingUserQuestion: PendingUserQuestion | null;
   /** Per-instance approved tools (for "ask" permission mode) */
   approvedTools: Set<string>;
+  /** In-progress content blocks for the current turn (flushed on result) */
+  streamingBlocks: ContentBlock[];
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +250,7 @@ export class StreamProcessManager extends EventEmitter {
       pendingPermission: null,
       pendingUserQuestion: null,
       approvedTools: new Set<string>(),
+      streamingBlocks: [],
     };
 
     this.handles.set(id, handle);
@@ -473,23 +476,25 @@ export class StreamProcessManager extends EventEmitter {
     if (!handle) return;
     const instance = handle.instance;
 
-    let assistantBlocks: ContentBlock[] = [];
+    // Use handle.streamingBlocks so in-progress content is accessible
+    // when a client re-joins (e.g. tab switch).
+    handle.streamingBlocks = [];
 
     try {
       for await (const msg of conversation) {
         // Instance may have been killed while we were iterating
         if (!this.handles.has(instanceId)) break;
 
-        this.handleSDKMessage(instanceId, msg, assistantBlocks);
+        this.handleSDKMessage(instanceId, msg, handle.streamingBlocks);
 
         // A `result` message means the turn is complete — flush blocks,
         // persist, and transition to WAITING_INPUT so the user can send
         // the next message.  The loop stays alive for the next turn.
         if (msg.type === 'result') {
-          if (assistantBlocks.length > 0) {
+          if (handle.streamingBlocks.length > 0) {
             const chatMsg: ChatMessage = {
               role: 'assistant',
-              content: assistantBlocks,
+              content: handle.streamingBlocks,
               timestamp: new Date().toISOString(),
             };
 
@@ -505,7 +510,7 @@ export class StreamProcessManager extends EventEmitter {
               instance.messages.push(chatMsg);
               this.emit('message', instanceId, chatMsg);
             }
-            assistantBlocks = [];
+            handle.streamingBlocks = [];
           }
 
           instance.status = INSTANCE_STATUS.WAITING_INPUT;
@@ -523,11 +528,11 @@ export class StreamProcessManager extends EventEmitter {
       }
     }
 
-    // Flush any remaining assistant blocks on conversation end (with dedup)
-    if (assistantBlocks.length > 0) {
+    // Flush any remaining blocks on conversation end (with dedup)
+    if (handle.streamingBlocks.length > 0) {
       const chatMsg: ChatMessage = {
         role: 'assistant',
-        content: assistantBlocks,
+        content: handle.streamingBlocks,
         timestamp: new Date().toISOString(),
       };
       const lastAssistant = [...instance.messages].reverse().find(m => m.role === 'assistant');
@@ -537,6 +542,7 @@ export class StreamProcessManager extends EventEmitter {
         instance.messages.push(chatMsg);
         this.emit('message', instanceId, chatMsg);
       }
+      handle.streamingBlocks = [];
     }
 
     // Conversation has ended (closed, killed, or errored) — clean up
@@ -812,6 +818,45 @@ export class StreamProcessManager extends EventEmitter {
     return handle?.approvedTools ?? new Set();
   }
 
+  /**
+   * Get any pending permission request or user question for an instance.
+   * Used to re-emit state after frontend reconnects.
+   */
+  getPendingState(instanceId: string): {
+    pendingPermission: { toolName: string; toolInput: Record<string, unknown>; toolUseId: string; filePath?: string; title?: string; description?: string } | null;
+    pendingUserQuestion: { toolUseId: string; questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; allowMultiple?: boolean }> } | null;
+  } {
+    const handle = this.handles.get(instanceId);
+    if (!handle) return { pendingPermission: null, pendingUserQuestion: null };
+
+    const pp = handle.pendingPermission;
+    const pq = handle.pendingUserQuestion;
+
+    return {
+      pendingPermission: pp ? {
+        toolName: pp.toolName,
+        toolInput: pp.toolInput,
+        toolUseId: pp.toolUseId,
+        filePath: pp.filePath,
+        title: pp.title,
+        description: pp.description,
+      } : null,
+      pendingUserQuestion: pq ? {
+        toolUseId: pq.toolUseId,
+        questions: pq.questions,
+      } : null,
+    };
+  }
+
+  /**
+   * Get in-progress content blocks for the current turn.
+   * Used to restore streaming state when a client re-joins (tab switch).
+   */
+  getStreamingBlocks(instanceId: string): ContentBlock[] {
+    const handle = this.handles.get(instanceId);
+    return handle ? [...handle.streamingBlocks] : [];
+  }
+
   // -------------------------------------------------------------------------
   // Instance management
   // -------------------------------------------------------------------------
@@ -1001,6 +1046,7 @@ export class StreamProcessManager extends EventEmitter {
       return [];
     }
   }
+
 
   /**
    * Map SDK SessionMessage[] to our ChatMessage[] format.
