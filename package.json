@@ -1,7 +1,10 @@
 {
   "name": "claude-dashboard",
   "version": "0.1.0",
+  "description": "Agentic Development Environment — orchestrate multiple Claude Code instances",
+  "author": "ADE",
   "private": true,
+  "main": "electron/dist/main.js",
   "workspaces": [
     "packages/backend",
     "packages/frontend"
@@ -10,11 +13,28 @@
     "dev": "concurrently -n backend,frontend -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:backend": "npm run dev -w packages/backend",
     "dev:frontend": "npm run dev -w packages/frontend",
+    "dev:electron": "NODE_ENV=development concurrently -n backend,frontend,electron -c blue,green,magenta \"npm run dev:backend\" \"npm run dev:frontend\" \"sleep 3 && npx electron electron/dist/main.js\"",
     "build": "npm run build -w packages/backend && npm run build -w packages/frontend",
+    "build:electron": "npm run build -w packages/backend && BUILD_TARGET=electron npm run build -w packages/frontend && npx esbuild electron/main.ts electron/preload.ts --bundle --platform=node --outdir=electron/dist --external:electron --format=cjs",
+    "package": "npm run build:electron && npx electron-builder --mac",
     "lint": "eslint 'packages/*/src/**/*.{ts,tsx}'",
     "typecheck": "npm run typecheck -w packages/backend && npm run typecheck -w packages/frontend"
   },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.92",
+    "cors": "^2.8.6",
+    "express": "^4.21.2",
+    "js-yaml": "^4.1.1",
+    "node-pty": "^1.1.0",
+    "pidusage": "^4.0.1",
+    "simple-git": "^3.32.3",
+    "socket.io": "^4.8.1",
+    "uuid": "^13.0.0"
+  },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "electron": "^35.7.5",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.28.0"
   }
 }

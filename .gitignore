@@ -3,3 +3,7 @@ dist/
 *.tsbuildinfo
 .vite/
 dev-dist/
+
+# Electron
+electron/dist/
+release/

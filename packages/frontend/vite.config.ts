@@ -3,11 +3,19 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
+const isElectron = process.env.BUILD_TARGET === 'electron';
+
 export default defineConfig({
+  // For Electron, output to electron/dist/renderer so electron-builder can bundle it
+  build: isElectron ? {
+    outDir: '../../electron/dist/renderer',
+    emptyOutDir: true,
+  } : undefined,
   plugins: [
     react(),
     tailwindcss(),
-    VitePWA({
+    // Skip PWA in Electron builds — Electron handles offline/caching natively
+    ...(!isElectron ? [VitePWA({
       registerType: 'autoUpdate',
       devOptions: {
         enabled: true,
@@ -41,7 +49,7 @@ export default defineConfig({
           },
         ],
       },
-    }),
+    })] : []),
   ],
   server: {
     proxy: {

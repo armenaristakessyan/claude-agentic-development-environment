@@ -1,0 +1,42 @@
+appId: com.claude.ade
+productName: Claude ADE
+copyright: Copyright © 2025
+
+directories:
+  output: release
+
+files:
+  # Electron main + preload (compiled)
+  - electron/dist/**/*
+  # Backend compiled output
+  - packages/backend/dist/**/*
+  # Backend package.json (needed for module resolution)
+  - packages/backend/package.json
+  # Node modules (electron-builder prunes dev deps automatically)
+  - node_modules/**/*
+  - package.json
+
+# Backend must be outside ASAR — fork() can't execute inside archives
+# node-pty has native binaries that also can't be in ASAR
+asarUnpack:
+  - packages/backend/**/*
+  - node_modules/**/*
+
+# Frontend is pre-built into electron/dist/renderer and served by Express
+extraResources:
+  - from: packages/frontend/public/pwa-512x512.png
+    to: icon.png
+
+mac:
+  category: public.app-category.developer-tools
+  icon: packages/frontend/public/pwa-512x512.png
+  target:
+    - target: dmg
+      arch:
+        - arm64
+
+asar: true
+
+# node-pty ships prebuilds for macOS arm64, no rebuild needed
+nodeGypRebuild: false
+npmRebuild: false

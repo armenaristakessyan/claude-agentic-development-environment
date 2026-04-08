@@ -280,8 +280,8 @@ export default function App() {
   return (
     <div className="flex h-full flex-col bg-root">
       {/* Topbar — full width, same bg as root */}
-      <div className="flex h-10 shrink-0 items-center px-4">
-        {/* Left: logo + project + branch */}
+      <div className={`flex h-10 shrink-0 items-center px-4 ${(window as any).electronAPI ? 'pl-20' : ''}`} style={(window as any).electronAPI ? { WebkitAppRegion: 'drag' } as React.CSSProperties : undefined}>
+        {/* Left: logo + project + branch (pl-20 clears macOS traffic lights in Electron) */}
         <div className="flex shrink-0 items-center gap-3">
           <img src="/favicon.png" alt="Logo" className={`h-4 w-4 opacity-60 ${theme === 'dark' ? 'invert' : ''}`} />
           <span className="text-[13px] font-medium text-secondary">
@@ -311,7 +311,7 @@ export default function App() {
         )}
 
         {/* Right: rate limit + queue count + sidebar toggles */}
-        <div className="ml-auto flex shrink-0 items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2" style={(window as any).electronAPI ? { WebkitAppRegion: 'no-drag' } as React.CSSProperties : undefined}>
           <RtkStatusIndicator
             status={rtkStatus}
             stats={rtkStats}
