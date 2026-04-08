@@ -940,6 +940,117 @@ export function createRoutes(
     }
   });
 
+  // Search code across project files
+  router.get('/api/projects/search', (req, res) => {
+    const projectPath = req.query.path as string;
+    const query = (req.query.q as string ?? '').trim();
+    if (!projectPath || !existsSync(projectPath)) {
+      res.status(400).json({ error: 'Valid project path is required' });
+      return;
+    }
+    if (!query) { res.json({ results: [] }); return; }
+
+    try {
+      // Escape special regex chars for literal search, and shell-unsafe chars
+      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/'/g, "'\\''");
+      const output = execSync(
+        `grep -rn --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist --exclude-dir=build --exclude-dir=__pycache__ --exclude-dir=target --exclude-dir=vendor --exclude-dir=.next --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --include='*.py' --include='*.rs' --include='*.go' --include='*.java' --include='*.rb' --include='*.php' --include='*.swift' --include='*.kt' --include='*.scala' --include='*.c' --include='*.cpp' --include='*.h' --include='*.hpp' --include='*.cs' --include='*.lua' --include='*.ex' --include='*.exs' --include='*.hs' --include='*.ml' --include='*.json' --include='*.yaml' --include='*.yml' --include='*.toml' --include='*.md' --include='*.css' --include='*.scss' --include='*.html' --include='*.sql' --include='*.sh' --include='*.bash' --include='*.zsh' --include='*.proto' --include='*.graphql' --include='*.tf' -i -E '${escaped}' . 2>/dev/null || true`,
+        { cwd: projectPath, encoding: 'utf-8', timeout: 8000, maxBuffer: 1024 * 1024 },
+      );
+      const results = output.trim().split('\n')
+        .filter(Boolean)
+        .slice(0, 100)
+        .map(line => {
+          const match = line.match(/^\.\/(.+?):(\d+):(.+)$/);
+          if (!match) return null;
+          const [, filePath, lineNum, text] = match;
+          return { filePath, line: parseInt(lineNum, 10), text: text.trim().slice(0, 200) };
+        })
+        .filter(Boolean);
+      res.json({ results });
+    } catch {
+      res.json({ results: [] });
+    }
+  });
+
+  // --- Project file browsing (no instance required) ---
+
+  // List files in a project directory (git-tracked or fallback)
+  router.get('/api/projects/files', (req, res) => {
+    const projectPath = req.query.path as string;
+    if (!projectPath || !existsSync(projectPath)) {
+      res.status(400).json({ error: 'Valid project path is required' });
+      return;
+    }
+
+    try {
+      let files: string[];
+      try {
+        const output = execSync('git ls-files --cached --others --exclude-standard', {
+          cwd: projectPath,
+          encoding: 'utf-8',
+          timeout: 5000,
+        });
+        files = output.trim().split('\n').filter(Boolean);
+      } catch {
+        // Fallback: recursive file listing (limited depth)
+        files = [];
+        const walk = (dir: string, prefix: string, depth: number) => {
+          if (depth > 5) return;
+          const entries = readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+            const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+            if (entry.isDirectory()) {
+              walk(join(dir, entry.name), rel, depth + 1);
+            } else {
+              files.push(rel);
+            }
+          }
+        };
+        walk(projectPath, '', 0);
+      }
+      res.json({ files });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to list files';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Read file content from a project directory
+  router.post('/api/projects/file-content', (req, res) => {
+    const { projectPath, filePath } = req.body as { projectPath?: string; filePath?: string };
+    if (!projectPath || !filePath) {
+      res.status(400).json({ error: 'projectPath and filePath are required' });
+      return;
+    }
+
+    try {
+      const fullPath = join(projectPath, filePath);
+      // Security: ensure path is within project
+      if (!fullPath.startsWith(projectPath)) {
+        res.status(403).json({ error: 'Path outside project' });
+        return;
+      }
+      if (!existsSync(fullPath)) {
+        res.status(404).json({ error: 'File not found' });
+        return;
+      }
+      const stat = statSync(fullPath);
+      if (stat.isDirectory()) {
+        res.status(400).json({ error: 'Path is a directory' });
+        return;
+      }
+      // Check if binary (simple heuristic)
+      const content = readFileSync(fullPath, 'utf-8');
+      const truncated = content.length > 100_000 ? content.slice(0, 100_000) + '\n... (truncated)' : content;
+      res.json({ path: filePath, content: truncated, size: stat.size });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to read file';
+      res.status(500).json({ error: message });
+    }
+  });
+
   // Slash commands (cached from last session init)
   router.get('/api/slash-commands', async (req, res) => {
     if (req.query.refresh) {

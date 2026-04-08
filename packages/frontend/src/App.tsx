@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar';
 import ResizeHandle from './components/ResizeHandle';
 import ChatView from './components/ChatView';
 import TaskChangesPanel from './components/TaskChangesPanel';
+import CodeSearchModal from './components/CodeSearchModal';
 import ScanPathsModal from './components/ScanPathsModal';
 import LaunchModal from './components/LaunchModal';
 import { useProjects } from './hooks/useProjects';
@@ -254,6 +255,14 @@ export default function App() {
       key: 'Meta+n',
       handler: () => setNewTaskOpen(true),
     },
+    // Cmd+Shift+F — code search
+    {
+      key: 'Meta+Shift+f',
+      handler: () => {
+        if (selectedInstance) setCodeSearchOpen(true);
+      },
+      enabled: !!selectedInstance,
+    },
   ], [sortedActive, selectedInstance, selectedInstanceId, queue, handleKill]));
 
   // Sidebar toggle + resizable widths
@@ -261,8 +270,19 @@ export default function App() {
   const [rightOpen, setRightOpen] = useState(true);
   const [leftWidth, setLeftWidth] = useState(240);
   const [rightWidth, setRightWidth] = useState(280);
-  const [taskChangesInstanceId, setTaskChangesInstanceId] = useState<string | null>(null);
   const [changesWidth, setChangesWidth] = useState(480);
+  // Independent open state for each tab in the combined panel
+  const [changesInstanceId, setChangesInstanceId] = useState<string | null>(null);
+  const [viewerInstanceId, setViewerInstanceId] = useState<string | null>(null);
+  const [openFiles, setOpenFiles] = useState<string[]>([]);
+  const [activeFileTab, setActiveFileTab] = useState<string | null>(null);
+  const [scrollToLine, setScrollToLine] = useState<number | undefined>(undefined);
+  const [codeSearchOpen, setCodeSearchOpen] = useState(false);
+  const [codeSelection, setCodeSelection] = useState<{ filePath: string; startLine: number; endLine: number; code: string } | null>(null);
+
+  // The panel is open if either tab is open
+  const panelInstanceId = changesInstanceId ?? viewerInstanceId;
+  const showChanges = !!changesInstanceId;
 
   const handleLeftResize = useCallback((delta: number) => {
     setLeftWidth(prev => Math.min(400, Math.max(160, prev + delta)));
@@ -273,9 +293,61 @@ export default function App() {
   }, []);
 
   const handleChangesResize = useCallback((delta: number) => {
-    // Dragging left = wider panel (negative delta from "right" side handle → invert)
     setChangesWidth(prev => Math.min(900, Math.max(320, prev + delta)));
   }, []);
+
+  const handleOpenTaskChanges = useCallback((instanceId: string) => {
+    setChangesInstanceId(instanceId);
+    // If viewer is open for a different instance, keep it; same instance is fine
+  }, []);
+
+  const handleCloseChanges = useCallback(() => {
+    setChangesInstanceId(null);
+  }, []);
+
+  const handleCloseFile = useCallback((filePath: string) => {
+    setOpenFiles(prev => {
+      const next = prev.filter(f => f !== filePath);
+      // If we closed the active tab, switch to the last remaining file or null
+      if (activeFileTab === filePath) {
+        setActiveFileTab(next.length > 0 ? next[next.length - 1] : null);
+      }
+      if (next.length === 0) setViewerInstanceId(null);
+      return next;
+    });
+  }, [activeFileTab]);
+
+  const handleCloseAllFiles = useCallback(() => {
+    setOpenFiles([]);
+    setActiveFileTab(null);
+    setViewerInstanceId(null);
+  }, []);
+
+  const handleClosePanel = useCallback(() => {
+    setChangesInstanceId(null);
+    setViewerInstanceId(null);
+    setOpenFiles([]);
+    setActiveFileTab(null);
+  }, []);
+
+  const handleOpenFileViewer = useCallback((projectPath: string, projectName: string, filePath?: string, line?: number) => {
+    const match = instances.find(i =>
+      i.status !== 'exited' && (i.projectPath === projectPath || i.worktreePath === projectPath),
+    );
+    const targetId = match?.id ?? selectedInstanceId;
+    if (targetId && filePath) {
+      setViewerInstanceId(targetId);
+      setOpenFiles(prev => prev.includes(filePath) ? prev : [...prev, filePath]);
+      setActiveFileTab(filePath);
+      setScrollToLine(line);
+    }
+  }, [instances, selectedInstanceId]);
+
+  const handleSearchSelect = useCallback((filePath: string, line: number) => {
+    if (!selectedInstance) return;
+    const projectPath = selectedInstance.worktreePath ?? selectedInstance.projectPath;
+    handleOpenFileViewer(projectPath, selectedInstance.projectName, filePath, line);
+  }, [selectedInstance, handleOpenFileViewer]);
 
   return (
     <div className="flex h-full flex-col bg-root">
@@ -400,6 +472,8 @@ export default function App() {
               draft={drafts[selectedInstance.id] ?? ''}
               onDraftChange={handleDraftChange}
               rateLimitInfo={rateLimitInfo}
+              codeSelection={codeSelection}
+              onClearCodeSelection={() => setCodeSelection(null)}
             />
           ) : (
             <div className="flex h-full items-center justify-center">
@@ -419,16 +493,26 @@ export default function App() {
           </div>
         </main>
 
-        {/* Task Changes panel — opens between main and right sidebar */}
-        {taskChangesInstanceId && (
+        {/* Task Changes + File Viewer panel */}
+        {panelInstanceId && (
           <>
             <ResizeHandle side="right" onResize={handleChangesResize} />
             <TaskChangesPanel
-              instanceId={taskChangesInstanceId}
+              instanceId={panelInstanceId}
               instances={instances}
               width={changesWidth}
-              onClose={() => setTaskChangesInstanceId(null)}
+              onClose={handleClosePanel}
+              onCloseChanges={handleCloseChanges}
+              onCloseFile={handleCloseFile}
+              onCloseAllFiles={handleCloseAllFiles}
               onDeleteWorktree={handleDeleteWorktree}
+              openFiles={openFiles}
+              activeFileTab={activeFileTab}
+              onSelectFileTab={setActiveFileTab}
+              showChanges={showChanges}
+              scrollToLine={scrollToLine}
+              onScrollDone={() => setScrollToLine(undefined)}
+              onCodeSelect={setCodeSelection}
             />
           </>
         )}
@@ -447,7 +531,8 @@ export default function App() {
           onLaunchProject={handleLaunch}
           onDeleteWorktree={handleDeleteWorktree}
           onOpenScanPaths={() => setScanPathsOpen(true)}
-          onOpenTaskChanges={setTaskChangesInstanceId}
+          onOpenTaskChanges={handleOpenTaskChanges}
+          onOpenFileViewer={handleOpenFileViewer}
           width={rightWidth}
           collapsed={!rightOpen}
           onExpand={() => setRightOpen(true)}
@@ -472,6 +557,14 @@ export default function App() {
           scanPaths={config?.scanPaths ?? []}
           onSave={handleSaveScanPaths}
           onClose={() => setScanPathsOpen(false)}
+        />
+      )}
+
+      {codeSearchOpen && selectedInstance && (
+        <CodeSearchModal
+          projectPath={selectedInstance.worktreePath ?? selectedInstance.projectPath}
+          onSelect={handleSearchSelect}
+          onClose={() => setCodeSearchOpen(false)}
         />
       )}
     </div>

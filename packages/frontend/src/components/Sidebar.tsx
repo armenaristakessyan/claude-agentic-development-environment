@@ -1,7 +1,8 @@
-import { RefreshCw, FolderPlus, FolderOpen, GitBranch, FileDiff, Store, Shield, ChevronDown, ChevronRight, Loader } from 'lucide-react';
-import { useState, useEffect, useCallback } from 'react';
+import { RefreshCw, FolderPlus, LayoutList, GitBranch, FileDiff, Store, Shield, ChevronDown, ChevronRight, Loader, TextSearch, Search, Folder } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import ProjectList from './ProjectList';
 import MarketplacePanel from './MarketplacePanel';
+import { buildFileTree, FileTreeView, FileIcon } from './FileViewerPanel';
 import type { Project, Instance } from '../types';
 
 export interface GitChange {
@@ -21,6 +22,7 @@ interface SidebarProps {
   onDeleteWorktree: (projectPath: string, worktreePath: string) => void;
   onOpenScanPaths: () => void;
   onOpenTaskChanges?: (instanceId: string) => void;
+  onOpenFileViewer?: (projectPath: string, projectName: string, filePath?: string) => void;
   width: number;
   collapsed: boolean;
   onExpand: () => void;
@@ -42,14 +44,20 @@ export default function Sidebar({
   onDeleteWorktree,
   onOpenScanPaths,
   onOpenTaskChanges,
+  onOpenFileViewer,
   selectedInstanceId,
   width,
   collapsed,
   onExpand,
 }: SidebarProps) {
   const [selectedRoot, setSelectedRoot] = useState<string | null>(scanPaths[0] ?? null);
-  const [tab, setTab] = useState<'files' | 'changes' | 'marketplace'>('files');
+  const [tab, setTab] = useState<'files' | 'explorer' | 'changes' | 'marketplace'>('files');
   const [showPermissions, setShowPermissions] = useState(false);
+
+  // Resolve selected instance for explorer tab
+  const selectedInstance = instances.find(i => i.id === selectedInstanceId);
+  const explorerProjectPath = selectedInstance?.worktreePath ?? selectedInstance?.projectPath ?? null;
+  const explorerProjectName = selectedInstance?.projectName ?? null;
 
   // Collapsed: thin icon strip
   if (collapsed) {
@@ -60,7 +68,14 @@ export default function Sidebar({
           className={`rounded p-2 transition-colors hover:bg-elevated/30 hover:text-tertiary ${tab === 'files' ? 'text-tertiary' : 'text-faint'}`}
           title="Projects"
         >
-          <FolderOpen className="h-4 w-4" />
+          <LayoutList className="h-4 w-4" />
+        </button>
+        <button
+          onClick={() => { onExpand(); setTab('explorer'); }}
+          className={`rounded p-2 transition-colors hover:bg-elevated/30 hover:text-tertiary ${tab === 'explorer' ? 'text-tertiary' : 'text-faint'}`}
+          title="Explorer"
+        >
+          <TextSearch className="h-4 w-4" />
         </button>
         <button
           onClick={() => { onExpand(); setTab('changes'); }}
@@ -100,8 +115,18 @@ export default function Sidebar({
           }`}
           title="Projects"
         >
-          <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+          <LayoutList className="h-3.5 w-3.5 shrink-0" />
           {tab === 'files' && <span>Projects</span>}
+        </button>
+        <button
+          onClick={() => setTab('explorer')}
+          className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors ${
+            tab === 'explorer' ? 'text-secondary' : 'text-faint hover:text-tertiary'
+          }`}
+          title="Explorer"
+        >
+          <TextSearch className="h-3.5 w-3.5 shrink-0" />
+          {tab === 'explorer' && <span>Explorer</span>}
         </button>
         <button
           onClick={() => setTab('changes')}
@@ -175,6 +200,16 @@ export default function Sidebar({
             onDeleteWorktree={onDeleteWorktree}
           />
         </div>
+      ) : tab === 'explorer' ? (
+        <ExplorerPanel
+          projectPath={explorerProjectPath}
+          projectName={explorerProjectName}
+          onFileSelect={(filePath) => {
+            if (explorerProjectPath && explorerProjectName) {
+              onOpenFileViewer?.(explorerProjectPath, explorerProjectName, filePath);
+            }
+          }}
+        />
       ) : tab === 'changes' ? (
         <GitChangesPanel instances={instances} onOpenTaskChanges={onOpenTaskChanges} />
       ) : (
@@ -416,6 +451,129 @@ function GitChangesPanel({ instances, onOpenTaskChanges }: { instances: Instance
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// --- Explorer Panel (file tree for current task's project) ---
+
+function ExplorerPanel({
+  projectPath,
+  projectName,
+  onFileSelect,
+}: {
+  projectPath: string | null;
+  projectName: string | null;
+  onFileSelect: (filePath: string) => void;
+}) {
+  const [files, setFiles] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!projectPath) {
+      setFiles([]);
+      return;
+    }
+    setLoading(true);
+    setFilter('');
+    setSelectedFile(null);
+    fetch(`/api/projects/files?path=${encodeURIComponent(projectPath)}`)
+      .then(res => res.ok ? res.json() as Promise<{ files: string[] }> : Promise.reject(new Error('Failed')))
+      .then(data => {
+        setFiles(data.files);
+        setLoading(false);
+        setExpandedFolders(new Set());
+      })
+      .catch(() => setLoading(false));
+  }, [projectPath]);
+
+  const tree = useMemo(() => buildFileTree(files), [files]);
+
+  const filteredFiles = useMemo(() => {
+    if (!filter) return null;
+    const lower = filter.toLowerCase();
+    return files.filter(f => f.toLowerCase().includes(lower));
+  }, [files, filter]);
+
+  const toggleFolder = useCallback((path: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const handleSelect = useCallback((filePath: string) => {
+    setSelectedFile(filePath);
+    onFileSelect(filePath);
+  }, [onFileSelect]);
+
+  if (!projectPath) {
+    return (
+      <div className="flex flex-1 items-center justify-center px-4">
+        <p className="text-center text-[12px] text-faint">Select a task to browse its project files</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      {/* Project name header */}
+      <div className="shrink-0 px-3 py-2">
+        <div className="truncate text-[11px] font-medium text-muted">{projectName}</div>
+        <div className="truncate text-[10px] text-faint">{shortenPath(projectPath)}</div>
+      </div>
+
+      {/* Search */}
+      <div className="relative shrink-0 px-3 pb-1.5">
+        <Search className="absolute left-5 top-1.5 h-3 w-3 text-faint" />
+        <input
+          type="text"
+          placeholder="Filter files..."
+          value={filter}
+          onChange={e => setFilter(e.target.value)}
+          className="w-full rounded bg-elevated/30 py-1 pl-6 pr-2 text-[11px] text-tertiary placeholder-placeholder outline-none transition-colors focus:bg-elevated/50"
+        />
+      </div>
+
+      {/* File tree */}
+      <div className="flex-1 overflow-y-auto px-1 pb-2">
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader className="h-4 w-4 animate-spin text-faint" />
+          </div>
+        ) : filteredFiles ? (
+          filteredFiles.length === 0 ? (
+            <p className="py-4 text-center text-[11px] text-faint">No matches</p>
+          ) : (
+            filteredFiles.slice(0, 200).map(f => (
+              <button
+                key={f}
+                onClick={() => handleSelect(f)}
+                className={`flex w-full items-center gap-1.5 rounded px-2 py-0.5 text-left transition-colors ${
+                  selectedFile === f ? 'bg-blue-500/15 text-primary' : 'text-tertiary hover:bg-hover'
+                }`}
+              >
+                <FileIcon fileName={f} />
+                <span className="min-w-0 flex-1 truncate text-[11px]">{f}</span>
+              </button>
+            ))
+          )
+        ) : (
+          <FileTreeView
+            nodes={tree}
+            depth={0}
+            expanded={expandedFolders}
+            selectedFile={selectedFile}
+            onToggle={toggleFolder}
+            onSelect={handleSelect}
+          />
+        )}
       </div>
     </div>
   );

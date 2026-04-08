@@ -15,6 +15,7 @@ function isWaitingForUser(status: string): boolean {
 
 export function useAttentionQueue({
   instances,
+  selectedInstanceId,
   onSelectInstance,
   typingLocked,
 }: UseAttentionQueueOptions) {
@@ -82,16 +83,23 @@ export function useAttentionQueue({
     });
   }, [instances]);
 
-  // Auto-select front of queue when it changes — but NOT while user is typing
+  // Auto-select front of queue when a NEW instance enters the front.
+  // Do NOT switch away when the current instance leaves the queue (e.g. goes to processing).
   useEffect(() => {
     if (typingLocked) return;
 
     const frontId = queue.length > 0 ? queue[0].instanceId : null;
     if (frontId && frontId !== prevFrontRef.current) {
-      onSelectInstance(frontId);
+      // Only auto-switch if the selected instance is NOT currently processing
+      // (i.e. user just sent a message — don't yank them away)
+      const selectedInstance = instances.find(i => i.id === selectedInstanceId);
+      const selectedIsProcessing = selectedInstance?.status === 'processing';
+      if (!selectedIsProcessing) {
+        onSelectInstance(frontId);
+      }
     }
     prevFrontRef.current = frontId;
-  }, [queue, onSelectInstance, typingLocked]);
+  }, [queue, onSelectInstance, typingLocked, instances, selectedInstanceId]);
 
   const skipInstance = useCallback((id: string) => {
     setSkippedIds(prev => new Set(prev).add(id));

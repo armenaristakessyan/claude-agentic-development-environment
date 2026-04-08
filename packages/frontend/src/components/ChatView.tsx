@@ -9,6 +9,12 @@ import { useTheme } from '../contexts/ThemeContext';
 import type { ChatMessage, ContentBlock, ContextAttachment, SessionInfo } from '../types';
 
 
+function middleTruncate(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  const half = Math.floor((maxLen - 3) / 2);
+  return text.slice(0, half) + '...' + text.slice(text.length - half);
+}
+
 interface SessionMeta {
   sessionId: string | null;
   model: string | null;
@@ -84,6 +90,13 @@ function parseSlashCommand(cmd: string): ParsedSlashCommand {
   };
 }
 
+export interface CodeSelection {
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  code: string;
+}
+
 interface ChatViewProps {
   instanceId: string;
   status: string;
@@ -94,6 +107,8 @@ interface ChatViewProps {
   draft?: string;
   onDraftChange?: (value: string) => void;
   rateLimitInfo?: { status: string; resetsAt?: number; rateLimitType?: string } | null;
+  codeSelection?: CodeSelection | null;
+  onClearCodeSelection?: () => void;
 }
 
 /** Map a full model ID (e.g. "claude-sonnet-4-6") back to our short key */
@@ -104,7 +119,7 @@ function modelIdToKey(modelId: string | null | undefined): string {
   return 'opus';
 }
 
-export default function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, initialPermissionMode, draft, onDraftChange, rateLimitInfo }: ChatViewProps) {
+export default function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, initialPermissionMode, draft, onDraftChange, rateLimitInfo, codeSelection, onClearCodeSelection }: ChatViewProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamingBlocks, setStreamingBlocks] = useState<ContentBlock[]>([]);
   const [localInput, setLocalInput] = useState('');
@@ -628,13 +643,21 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
 
   // Build the context payload for the API
   const buildContextPayload = useCallback(() => {
-    if (contextItems.length === 0) return undefined;
-    return contextItems.map(item => ({
+    const items = [...contextItems];
+    if (codeSelection) {
+      items.push({
+        type: 'file',
+        label: `${codeSelection.filePath}:${codeSelection.startLine}-${codeSelection.endLine}`,
+        value: codeSelection.code,
+      });
+    }
+    if (items.length === 0) return undefined;
+    return items.map(item => ({
       type: item.type,
       label: item.label,
       value: item.value,
     }));
-  }, [contextItems]);
+  }, [contextItems, codeSelection]);
 
   // Direct send for hotkeys and quick-action buttons
   // force=true bypasses the sending guard (used for permission/question responses)
@@ -656,6 +679,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
         }),
       });
       setContextItems([]);
+      onClearCodeSelection?.();
     } catch {
       setSending(false);
       clearStalenessTimer();
@@ -809,11 +833,12 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
         }),
       });
       setContextItems([]);
+      onClearCodeSelection?.();
     } catch {
       setSending(false);
       clearStalenessTimer();
     }
-  }, [input, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload, isProcessing, handleInterrupt, resetStalenessTimer, clearStalenessTimer]);
+  }, [input, instanceId, selectedModel, permissionMode, effortLevel, buildContextPayload, isProcessing, handleInterrupt, resetStalenessTimer, clearStalenessTimer, onClearCodeSelection]);
 
   // Autocomplete from server-provided slash commands
   const [acIndex, setAcIndex] = useState(0);
@@ -1093,18 +1118,18 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
           )}
 
           {/* Context chips */}
-          {contextItems.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 pt-3 pb-1">
+          {(contextItems.length > 0 || codeSelection) && (
+            <div className="flex gap-1.5 overflow-x-auto pt-3 pb-1">
               {contextItems.map((item, i) => (
                 <span
                   key={i}
-                  className="flex items-center gap-1.5 rounded-md border border-border-input bg-hover px-2 py-1 text-[12px] text-tertiary"
+                  className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-input bg-hover px-2 py-1 text-[12px] text-tertiary"
                 >
                   {item.type === 'file' && <FileText className="h-3 w-3 text-faint" />}
                   {item.type === 'branch' && <GitBranchIcon className="h-3 w-3 text-faint" />}
                   {item.type === 'commit' && <GitCommit className="h-3 w-3 text-faint" />}
                   {item.type === 'changes' && <FileDiff className="h-3 w-3 text-faint" />}
-                  <span className="max-w-[150px] truncate">{item.label}</span>
+                  <span>{middleTruncate(item.label, 30)}</span>
                   <button
                     onClick={() => removeContext(i)}
                     className="ml-0.5 text-faint hover:text-tertiary"
@@ -1113,6 +1138,19 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
                   </button>
                 </span>
               ))}
+              {codeSelection && (
+                <span className="flex shrink-0 items-center gap-1.5 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[12px] text-violet-300" title={`${codeSelection.filePath}:${codeSelection.startLine}-${codeSelection.endLine}`}>
+                  <FileText className="h-3 w-3" />
+                  <span>{middleTruncate(codeSelection.filePath, 25)}:{codeSelection.startLine}-{codeSelection.endLine}</span>
+                  <span className="text-[10px] text-violet-300/60">{codeSelection.endLine - codeSelection.startLine + 1} lines</span>
+                  <button
+                    onClick={onClearCodeSelection}
+                    className="ml-0.5 text-violet-300/50 hover:text-violet-200"
+                  >
+                    &times;
+                  </button>
+                </span>
+              )}
             </div>
           )}
 
@@ -1547,12 +1585,12 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
           {attachments && attachments.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {attachments.map((att, i) => (
-                <span key={i} className="inline-flex items-center gap-1 rounded border border-border-input bg-badge px-1.5 py-0.5 text-[11px] text-tertiary">
+                <span key={i} className="inline-flex items-center gap-1 rounded border border-border-input bg-badge px-1.5 py-0.5 text-[11px] text-tertiary" title={att.label}>
                   {att.type === 'file' && <FileText className="h-2.5 w-2.5" />}
                   {att.type === 'branch' && <GitBranchIcon className="h-2.5 w-2.5" />}
                   {att.type === 'commit' && <GitCommit className="h-2.5 w-2.5" />}
                   {att.type === 'changes' && <FileDiff className="h-2.5 w-2.5" />}
-                  {att.label}
+                  {middleTruncate(att.label, 30)}
                 </span>
               ))}
             </div>
