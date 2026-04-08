@@ -1,5 +1,6 @@
 import { X, ChevronDown, ChevronRight, Loader, FileDiff, RefreshCw, Undo2, GitBranch, ArrowUpRight, GitMerge, Trash2, Check, AlertTriangle } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 import type { Instance } from '../types';
 import type { GitChange } from './Sidebar';
 
@@ -626,6 +627,9 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
 // --- Inline diff viewer with line numbers ---
 
 function DiffView({ diff }: { diff: string }) {
+  const { theme } = useTheme();
+  const light = theme === 'light';
+
   if (!diff || diff === '(no diff available)' || diff === '(failed to load diff)') {
     return <p className="px-4 py-3 text-[11px] text-faint">{diff || 'No diff'}</p>;
   }
@@ -679,15 +683,23 @@ function DiffView({ diff }: { diff: string }) {
             );
           }
 
-          const bgClass = p.type === 'removed' ? 'bg-rose-950/10'
-            : p.type === 'added' ? 'bg-emerald-950/10'
+          const bgClass = p.type === 'removed'
+            ? (light ? 'bg-rose-100' : 'bg-rose-950/10')
+            : p.type === 'added'
+            ? (light ? 'bg-emerald-100' : 'bg-emerald-950/10')
             : '';
           const numColor = p.type === 'context' ? 'text-faint' : 'text-faint';
-          const textColor = p.type === 'removed' ? 'text-rose-300/80'
-            : p.type === 'added' ? 'text-emerald-300/90'
+          const textColor = p.type === 'removed'
+            ? (light ? 'text-rose-700' : 'text-rose-300/80')
+            : p.type === 'added'
+            ? (light ? 'text-emerald-700' : 'text-emerald-300/90')
             : 'text-muted';
           const sign = p.type === 'removed' ? '-' : p.type === 'added' ? '+' : ' ';
-          const signColor = p.type === 'removed' ? 'text-rose-300/70' : p.type === 'added' ? 'text-emerald-400/60' : 'text-transparent';
+          const signColor = p.type === 'removed'
+            ? (light ? 'text-rose-500' : 'text-rose-300/70')
+            : p.type === 'added'
+            ? (light ? 'text-emerald-500' : 'text-emerald-400/60')
+            : 'text-transparent';
 
           return (
             <tr key={i} className={bgClass}>

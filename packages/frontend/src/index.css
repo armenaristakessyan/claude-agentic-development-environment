@@ -75,7 +75,7 @@
 [data-theme="light"] {
   /* Backgrounds */
   --bg-root: #f5f5f5;
-  --bg-codeblock: #e8e8e8;
+  --bg-codeblock: #f5f5f5;
   --bg-modal: #ffffff;
   --bg-popover: #ffffff;
   --bg-surface: #ffffff;

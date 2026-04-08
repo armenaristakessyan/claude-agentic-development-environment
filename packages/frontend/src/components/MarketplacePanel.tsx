@@ -1,5 +1,6 @@
 import { Search, RefreshCw, Loader, Plus, Trash2, GitBranch, X, RotateCw } from 'lucide-react';
 import { useState } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 import { useMarketplace } from '../hooks/useMarketplace';
 import PluginCard from './PluginCard';
 import PluginDetailModal from './PluginDetailModal';
@@ -19,6 +20,8 @@ function sourceLabel(source: { source: string; repo?: string; url?: string; path
 }
 
 export default function MarketplacePanel() {
+  const { theme } = useTheme();
+  const light = theme === 'light';
   const {
     plugins,
     loading,
@@ -132,7 +135,7 @@ export default function MarketplacePanel() {
               <button
                 onClick={handleAddSource}
                 disabled={addingSource || !addRepoInput.trim()}
-                className="rounded bg-green-900/50 px-2.5 py-1 text-[10px] font-medium text-green-400 transition-colors hover:bg-green-900/70 disabled:opacity-40"
+                className={`rounded px-2.5 py-1 text-[10px] font-medium transition-colors disabled:opacity-40 ${light ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-green-900/50 text-green-400 hover:bg-green-900/70'}`}
               >
                 {addingSource ? (
                   <Loader className="h-3 w-3 animate-spin" />
@@ -144,9 +147,9 @@ export default function MarketplacePanel() {
                 type="checkbox"
                 checked={addAutoUpdate}
                 onChange={e => setAddAutoUpdate(e.target.checked)}
-                className="h-3 w-3 rounded border-border-default bg-surface accent-green-500"
+                className={`h-3 w-3 rounded border-border-default bg-surface ${light ? 'accent-green-600' : 'accent-green-500'}`}
               />
-              <span className="text-[10px] text-muted">Auto-update on refresh</span>
+              <span className={`text-[10px] ${light ? 'text-secondary' : 'text-muted'}`}>Auto-update on refresh</span>
             </label>
             {addError && (
               <div className="mt-1.5 text-[10px] text-red-400">{addError}</div>

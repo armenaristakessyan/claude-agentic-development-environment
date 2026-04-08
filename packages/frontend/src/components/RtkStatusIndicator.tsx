@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Zap, X, Loader, ChevronDown, ChevronUp, PowerOff } from 'lucide-react';
+import { useTheme } from '../contexts/ThemeContext';
 import type { RtkStatus, RtkStats } from '../types';
 
 interface RtkStatusIndicatorProps {
@@ -30,6 +31,8 @@ export default function RtkStatusIndicator({
   onDismiss,
 }: RtkStatusIndicatorProps) {
   const [expanded, setExpanded] = useState(false);
+  const { theme } = useTheme();
+  const light = theme === 'light';
 
   if (loading) return null;
   if (!status?.installed) return null;
@@ -83,12 +86,12 @@ export default function RtkStatusIndicator({
     <div className="relative">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 rounded-md bg-green-950/25 px-2 py-0.5 text-[11px] text-green-400/80 transition-colors hover:bg-green-950/40"
+        className={`flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] transition-colors ${light ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-green-950/25 text-green-400/80 hover:bg-green-950/40'}`}
       >
         <Zap className="h-3 w-3" />
         RTK
         {stats && stats.savingsPercent > 0 && (
-          <span className="text-green-500/60">
+          <span className={light ? 'text-green-600/80' : 'text-green-500/60'}>
             {stats.savingsPercent}% saved
           </span>
         )}
@@ -101,7 +104,7 @@ export default function RtkStatusIndicator({
           <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border border-border-default bg-modal p-3 shadow-xl">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-[12px] font-medium text-secondary">RTK Token Compression</span>
-              <span className="rounded bg-green-950/40 px-1.5 py-0.5 text-[10px] text-green-400">Active</span>
+              <span className={`rounded px-1.5 py-0.5 text-[10px] ${light ? 'bg-green-100 text-green-700' : 'bg-green-950/40 text-green-400'}`}>Active</span>
             </div>
 
             {status.version && (
@@ -112,7 +115,7 @@ export default function RtkStatusIndicator({
               <div className="space-y-1.5">
                 <div className="flex justify-between text-[11px]">
                   <span className="text-muted">Tokens saved</span>
-                  <span className="text-green-400/80">{formatTokenCount(stats.totalTokensSaved)}</span>
+                  <span className={light ? 'text-green-700' : 'text-green-400/80'}>{formatTokenCount(stats.totalTokensSaved)}</span>
                 </div>
                 <div className="flex justify-between text-[11px]">
                   <span className="text-muted">Original tokens</span>
@@ -120,7 +123,7 @@ export default function RtkStatusIndicator({
                 </div>
                 <div className="flex justify-between text-[11px]">
                   <span className="text-muted">Savings</span>
-                  <span className="font-medium text-green-400">{stats.savingsPercent}%</span>
+                  <span className={`font-medium ${light ? 'text-green-700' : 'text-green-400'}`}>{stats.savingsPercent}%</span>
                 </div>
                 <div className="flex justify-between text-[11px]">
                   <span className="text-muted">Commands optimized</span>
@@ -129,7 +132,7 @@ export default function RtkStatusIndicator({
                 <div className="mt-2">
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-elevated">
                     <div
-                      className="h-full rounded-full bg-green-500/60 transition-all"
+                      className={`h-full rounded-full transition-all ${light ? 'bg-green-500' : 'bg-green-500/60'}`}
                       style={{ width: `${Math.min(100, stats.savingsPercent)}%` }}
                     />
                   </div>

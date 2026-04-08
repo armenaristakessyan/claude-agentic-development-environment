@@ -2064,6 +2064,8 @@ function PermissionPrompt({
 }
 
 function EditDiffView({ filePath, oldString, newString }: { filePath: string; oldString?: string; newString?: string }) {
+  const { theme } = useTheme();
+  const light = theme === 'light';
   const shortPath = shortenPath(filePath ?? '');
 
   if (!oldString && !newString) {
@@ -2076,18 +2078,18 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
     return (
       <div>
         <div className="flex items-center gap-2 border-b border-border-default bg-modal px-3 py-1.5">
-          <FilePlus className="h-3 w-3 text-emerald-300" />
+          <FilePlus className={`h-3 w-3 ${light ? 'text-emerald-600' : 'text-emerald-300'}`} />
           <span className="text-[11px] font-mono text-tertiary">{shortPath}</span>
-          <span className="text-[10px] text-emerald-300/70">+{lines.length} lines</span>
+          <span className={`text-[10px] ${light ? 'text-emerald-600' : 'text-emerald-300/70'}`}>+{lines.length} lines</span>
         </div>
         <div className="max-h-64 overflow-auto">
           <table className="w-full border-collapse font-mono text-[11px] leading-[18px]">
             <tbody>
               {lines.slice(0, 50).map((line, i) => (
-                <tr key={i} className="bg-emerald-950/10">
+                <tr key={i} className={light ? 'bg-emerald-100' : 'bg-emerald-950/10'}>
                   <td className="w-10 select-none border-r border-border-default px-2 text-right text-faint">{i + 1}</td>
-                  <td className="w-5 select-none px-1 text-center text-emerald-400/70">+</td>
-                  <td className="whitespace-pre-wrap break-all px-2 text-emerald-300/90">{line || ' '}</td>
+                  <td className={`w-5 select-none px-1 text-center ${light ? 'text-emerald-500' : 'text-emerald-400/70'}`}>+</td>
+                  <td className={`whitespace-pre-wrap break-all px-2 ${light ? 'text-emerald-700' : 'text-emerald-300/90'}`}>{line || ' '}</td>
                 </tr>
               ))}
               {lines.length > 50 && (
@@ -2114,8 +2116,8 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
         <Pencil className="h-3 w-3 text-blue-300" />
         <span className="text-[11px] font-mono text-tertiary">{shortPath}</span>
         <div className="ml-auto flex items-center gap-2 text-[10px]">
-          {removedCount > 0 && <span className="text-rose-300/70">-{removedCount}</span>}
-          {addedCount > 0 && <span className="text-emerald-300/70">+{addedCount}</span>}
+          {removedCount > 0 && <span className={light ? 'text-rose-600' : 'text-rose-300/70'}>-{removedCount}</span>}
+          {addedCount > 0 && <span className={light ? 'text-emerald-600' : 'text-emerald-300/70'}>+{addedCount}</span>}
         </div>
       </div>
       {/* Diff lines */}
@@ -2123,13 +2125,21 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
         <table className="w-full border-collapse font-mono text-[11px] leading-[18px]">
           <tbody>
             {diff.slice(0, 80).map((d, i) => {
-              const bgClass = d.type === 'removed' ? 'bg-rose-950/10'
-                : d.type === 'added' ? 'bg-emerald-950/10'
+              const bgClass = d.type === 'removed'
+                ? (light ? 'bg-rose-100' : 'bg-rose-950/10')
+                : d.type === 'added'
+                ? (light ? 'bg-emerald-100' : 'bg-emerald-950/10')
                 : '';
               const numColor = d.type === 'same' ? 'text-faint' : 'text-faint';
-              const signColor = d.type === 'removed' ? 'text-rose-300/70' : d.type === 'added' ? 'text-emerald-400/70' : 'text-faint';
-              const textColor = d.type === 'removed' ? 'text-rose-300/80'
-                : d.type === 'added' ? 'text-emerald-300/90'
+              const signColor = d.type === 'removed'
+                ? (light ? 'text-rose-500' : 'text-rose-300/70')
+                : d.type === 'added'
+                ? (light ? 'text-emerald-500' : 'text-emerald-400/70')
+                : 'text-faint';
+              const textColor = d.type === 'removed'
+                ? (light ? 'text-rose-700' : 'text-rose-300/80')
+                : d.type === 'added'
+                ? (light ? 'text-emerald-700' : 'text-emerald-300/90')
                 : 'text-muted';
               const sign = d.type === 'removed' ? '-' : d.type === 'added' ? '+' : ' ';
 
@@ -2158,6 +2168,8 @@ function EditDiffView({ filePath, oldString, newString }: { filePath: string; ol
 
 /** Render a structured patch from the SDK's tool_use_result — proper hunk-based diff */
 function StructuredPatchView({ filePath, patches }: { filePath: string; patches: NonNullable<ContentBlock['structuredPatch']> }) {
+  const { theme } = useTheme();
+  const light = theme === 'light';
   const shortPath = shortenPath(filePath ?? '');
   let totalAdded = 0;
   let totalRemoved = 0;
@@ -2174,8 +2186,8 @@ function StructuredPatchView({ filePath, patches }: { filePath: string; patches:
         <Pencil className="h-3 w-3 text-blue-300" />
         <span className="text-[11px] font-mono text-tertiary">{shortPath}</span>
         <div className="ml-auto flex items-center gap-2 text-[10px]">
-          {totalRemoved > 0 && <span className="text-rose-300/70">-{totalRemoved}</span>}
-          {totalAdded > 0 && <span className="text-emerald-300/70">+{totalAdded}</span>}
+          {totalRemoved > 0 && <span className={light ? 'text-rose-600' : 'text-rose-300/70'}>-{totalRemoved}</span>}
+          {totalAdded > 0 && <span className={light ? 'text-emerald-600' : 'text-emerald-300/70'}>+{totalAdded}</span>}
         </div>
       </div>
       <div className="max-h-64 overflow-auto">
@@ -2193,10 +2205,22 @@ function StructuredPatchView({ filePath, patches }: { filePath: string; patches:
                     const isRemoved = line.startsWith('-');
                     const isAdded = line.startsWith('+');
                     const isContext = !isRemoved && !isAdded;
-                    const bgClass = isRemoved ? 'bg-rose-950/10' : isAdded ? 'bg-emerald-950/10' : '';
+                    const bgClass = isRemoved
+                      ? (light ? 'bg-rose-100' : 'bg-rose-950/10')
+                      : isAdded
+                      ? (light ? 'bg-emerald-100' : 'bg-emerald-950/10')
+                      : '';
                     const numColor = isContext ? 'text-faint' : 'text-faint';
-                    const signColor = isRemoved ? 'text-rose-300/70' : isAdded ? 'text-emerald-400/70' : 'text-faint';
-                    const textColor = isRemoved ? 'text-rose-300/80' : isAdded ? 'text-emerald-300/90' : 'text-muted';
+                    const signColor = isRemoved
+                      ? (light ? 'text-rose-500' : 'text-rose-300/70')
+                      : isAdded
+                      ? (light ? 'text-emerald-500' : 'text-emerald-400/70')
+                      : 'text-faint';
+                    const textColor = isRemoved
+                      ? (light ? 'text-rose-700' : 'text-rose-300/80')
+                      : isAdded
+                      ? (light ? 'text-emerald-700' : 'text-emerald-300/90')
+                      : 'text-muted';
                     const sign = isRemoved ? '-' : isAdded ? '+' : ' ';
                     const oNum = isAdded ? '' : oldLine;
                     const nNum = isRemoved ? '' : newLine;
@@ -2290,10 +2314,10 @@ const MODEL_OPTIONS = [
 ] as const;
 
 const PERMISSION_OPTIONS = [
-  { id: 'plan', label: 'Plan', description: 'Create plan before making changes', badgeBg: 'bg-amber-900/40', badgeText: 'text-amber-300/90' },
-  { id: 'ask', label: 'Ask Permission', description: 'Prompt for permission on the first use of each tool', badgeBg: 'bg-sky-900/40', badgeText: 'text-sky-300/90' },
-  { id: 'auto-edit', label: 'Auto-Edit', description: 'Auto-accept file edit permissions', badgeBg: 'bg-orange-900/40', badgeText: 'text-orange-300/80/90' },
-  { id: 'full-access', label: 'Full Access', description: 'Skip all permission prompts', badgeBg: 'bg-rose-900/40', badgeText: 'text-rose-300/90' },
+  { id: 'plan', label: 'Plan', description: 'Create plan before making changes', badgeBg: 'bg-amber-900/40', badgeText: 'text-amber-300/90', lightBadgeBg: 'bg-amber-100', lightBadgeText: 'text-amber-800' },
+  { id: 'ask', label: 'Ask Permission', description: 'Prompt for permission on the first use of each tool', badgeBg: 'bg-sky-900/40', badgeText: 'text-sky-300/90', lightBadgeBg: 'bg-sky-100', lightBadgeText: 'text-sky-800' },
+  { id: 'auto-edit', label: 'Auto-Edit', description: 'Auto-accept file edit permissions', badgeBg: 'bg-orange-900/40', badgeText: 'text-orange-300/80/90', lightBadgeBg: 'bg-orange-100', lightBadgeText: 'text-orange-800' },
+  { id: 'full-access', label: 'Full Access', description: 'Skip all permission prompts', badgeBg: 'bg-rose-900/40', badgeText: 'text-rose-300/90', lightBadgeBg: 'bg-rose-100', lightBadgeText: 'text-rose-800' },
 ] as const;
 
 const EFFORT_OPTIONS = [
@@ -2565,6 +2589,8 @@ function PermissionDropdown({
   onSelect: (id: string) => void;
   onClose: () => void;
 }) {
+  const { theme } = useTheme();
+  const light = theme === 'light';
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -2592,7 +2618,7 @@ function PermissionDropdown({
               opt.id === selectedId ? 'bg-blue-500/15' : 'hover:bg-hover'
             }`}
           >
-            <span className={`self-start rounded px-1.5 py-0.5 text-[12px] font-semibold ${opt.badgeBg} ${opt.badgeText}`}>
+            <span className={`self-start rounded px-1.5 py-0.5 text-[12px] font-semibold ${light ? opt.lightBadgeBg : opt.badgeBg} ${light ? opt.lightBadgeText : opt.badgeText}`}>
               {opt.label}
             </span>
             <span className="text-[12px] text-muted">{opt.description}</span>
@@ -2961,7 +2987,12 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <SyntaxHighlighter style={theme === 'dark' ? oneDark : oneLight} language={language} customStyle={{ margin: 0, padding: '12px', background: 'var(--bg-codeblock)', fontSize: '13px', borderRadius: 0 }}>
+      <SyntaxHighlighter
+        style={theme === 'dark' ? oneDark : oneLight}
+        language={language}
+        customStyle={{ margin: 0, padding: '12px', background: 'var(--bg-codeblock)', fontSize: '13px', borderRadius: 0 }}
+        codeTagProps={{ style: { background: 'transparent' } }}
+      >
         {code}
       </SyntaxHighlighter>
     </div>

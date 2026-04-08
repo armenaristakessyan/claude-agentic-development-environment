@@ -1,4 +1,6 @@
 import { Check, Download, Loader, Puzzle } from 'lucide-react';
+import { useRef } from 'react';
+import { useTheme } from '../contexts/ThemeContext';
 import type { PluginMetadata } from '../types';
 
 function formatCount(n: number): string {
@@ -22,6 +24,12 @@ interface PluginCardProps {
 }
 
 export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUninstall }: PluginCardProps) {
+  const { theme } = useTheme();
+  const light = theme === 'light';
+  // Capture installed state before loading started so optimistic updates don't flip the label
+  const wasInstalledRef = useRef(plugin.isInstalled);
+  if (!isLoading) wasInstalledRef.current = plugin.isInstalled;
+  const loadingLabel = wasInstalledRef.current ? 'Removing...' : 'Installing...';
   return (
     <button
       onClick={onClick}
@@ -78,12 +86,12 @@ export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUn
         {isLoading ? (
           <span className="flex items-center gap-1 rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300">
             <Loader className="h-2.5 w-2.5 animate-spin" />
-            {plugin.isInstalled ? 'Installing...' : 'Removing...'}
+            {loadingLabel}
           </span>
         ) : plugin.isInstalled ? (
           <span
             onClick={e => { e.stopPropagation(); onUninstall(); }}
-            className="flex items-center gap-1 rounded bg-green-500/10 px-2 py-0.5 text-[10px] text-emerald-300 transition-colors hover:bg-red-500/10 hover:text-rose-300"
+            className={`flex items-center gap-1 rounded px-2 py-0.5 text-[10px] transition-colors ${light ? 'bg-green-100 text-green-700 hover:bg-red-100 hover:text-rose-700' : 'bg-green-500/10 text-emerald-300 hover:bg-red-500/10 hover:text-rose-300'}`}
             title="Click to uninstall"
           >
             <Check className="h-2.5 w-2.5" />
