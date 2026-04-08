@@ -176,12 +176,16 @@ export class MarketplaceService {
 
     // Check if already cloned
     if (existsSync(clonePath)) {
-      // Pull latest
-      try {
-        execSync('git pull --rebase', { cwd: clonePath, encoding: 'utf-8', timeout: 30_000 });
-        console.log(`[marketplace] Updated existing clone at ${clonePath}`);
-      } catch (err) {
-        console.log(`[marketplace] Failed to pull ${clonePath}:`, err);
+      // Pull latest only if it's a git repo
+      if (existsSync(join(clonePath, '.git'))) {
+        try {
+          execSync('git pull --rebase', { cwd: clonePath, encoding: 'utf-8', timeout: 30_000 });
+          console.log(`[marketplace] Updated existing clone at ${clonePath}`);
+        } catch (err) {
+          console.log(`[marketplace] Failed to pull ${clonePath}:`, err);
+        }
+      } else {
+        console.log(`[marketplace] ${clonePath} exists but is not a git repo, skipping pull`);
       }
     } else {
       // Clone
@@ -422,6 +426,47 @@ export class MarketplaceService {
     return Object.keys(settings.enabledPlugins).filter(k => settings.enabledPlugins[k]);
   }
 
+  /** Return filesystem paths for all enabled plugins (for SDK plugin loading) */
+  getInstalledPluginPaths(): string[] {
+    const installed = this.getInstalledPlugins();
+    if (installed.length === 0) return [];
+
+    const marketplaces = this.getMarketplaces();
+    const paths: string[] = [];
+
+    for (const key of installed) {
+      // Key format: "pluginName@marketplaceName"
+      const atIdx = key.lastIndexOf('@');
+      if (atIdx < 0) continue;
+      const pluginName = key.slice(0, atIdx);
+      const marketplaceName = key.slice(atIdx + 1);
+
+      const entry = marketplaces[marketplaceName];
+      if (!entry) continue;
+
+      const pluginsDir = join(entry.installLocation, 'plugins');
+      if (!existsSync(pluginsDir)) continue;
+
+      // Search for the plugin directory by matching its .claude-plugin/plugin.json name
+      const allDirs = this.findAllPluginDirs(pluginsDir);
+      for (const { dir } of allDirs) {
+        const manifestPath = join(dir, '.claude-plugin', 'plugin.json');
+        if (!existsSync(manifestPath)) continue;
+        try {
+          const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+          if (manifest.name === pluginName) {
+            paths.push(dir);
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
+    }
+
+    return paths;
+  }
+
   /**
    * Refresh marketplace repos by pulling latest changes.
    * If a specific marketplace name is given, refreshes only that one (regardless of autoUpdate).
@@ -438,7 +483,7 @@ export class MarketplaceService {
       if (!marketplace && !entry.autoUpdate) continue;
 
       const isGit = entry.source.source === 'github' || entry.source.source === 'url';
-      if (isGit && existsSync(entry.installLocation)) {
+      if (isGit && existsSync(entry.installLocation) && existsSync(join(entry.installLocation, '.git'))) {
         try {
           execSync('git pull --rebase', {
             cwd: entry.installLocation,

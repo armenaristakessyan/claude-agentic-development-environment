@@ -1111,10 +1111,8 @@ export function createRoutes(
   router.post('/api/marketplace/plugins/:marketplace/:pluginName/install', async (req, res) => {
     try {
       marketplace.installPlugin(req.params.marketplace, req.params.pluginName);
-      // Refresh slash commands so new plugin commands are available immediately
-      processManager.prefetchSlashCommands(true).catch(err => {
-        console.log('[routes] Background slash command refresh failed:', err);
-      });
+      // Await slash command refresh so new plugin commands are available immediately
+      await processManager.prefetchSlashCommands(true);
       res.json({ ok: true });
     } catch (err) {
       console.log('[routes] Error installing plugin:', err);
@@ -1125,10 +1123,8 @@ export function createRoutes(
   router.post('/api/marketplace/plugins/:marketplace/:pluginName/uninstall', async (req, res) => {
     try {
       marketplace.uninstallPlugin(req.params.marketplace, req.params.pluginName);
-      // Refresh slash commands to remove uninstalled plugin commands
-      processManager.prefetchSlashCommands(true).catch(err => {
-        console.log('[routes] Background slash command refresh failed:', err);
-      });
+      // Await slash command refresh to remove uninstalled plugin commands
+      await processManager.prefetchSlashCommands(true);
       res.json({ ok: true });
     } catch (err) {
       console.log('[routes] Error uninstalling plugin:', err);

@@ -180,9 +180,20 @@ class InputController {
 export class StreamProcessManager extends EventEmitter {
   private handles = new Map<string, ProcessHandle>();
   private cachedSlashCommands: string[] | null = null;
+  private pluginPathsProvider: (() => string[]) | null = null;
 
   constructor(private config: AppConfig, private taskStore?: TaskStore) {
     super();
+  }
+
+  /** Set a callback that returns filesystem paths of installed plugins */
+  setPluginPathsProvider(provider: () => string[]): void {
+    this.pluginPathsProvider = provider;
+  }
+
+  private getPluginConfigs(): Array<{ type: 'local'; path: string }> {
+    if (!this.pluginPathsProvider) return [];
+    return this.pluginPathsProvider().map(p => ({ type: 'local' as const, path: p }));
   }
 
   getSlashCommands(): string[] {
@@ -193,11 +204,15 @@ export class StreamProcessManager extends EventEmitter {
   async prefetchSlashCommands(force = false): Promise<void> {
     if (this.cachedSlashCommands && !force) return;
     try {
+      const plugins = this.getPluginConfigs();
       const conversation = query({
         prompt: 'hi',
         options: {
           maxTurns: 0,
           persistSession: false,
+          systemPrompt: { type: 'preset', preset: 'claude_code' },
+          settingSources: ['project', 'local'],
+          plugins: plugins.length > 0 ? plugins : undefined,
         },
       });
       for await (const msg of conversation) {
@@ -423,6 +438,7 @@ export class StreamProcessManager extends EventEmitter {
     };
 
     // Build SDK options
+    const plugins = this.getPluginConfigs();
     const sdkOptions: Parameters<typeof query>[0]['options'] = {
       cwd,
       abortController,
@@ -435,6 +451,7 @@ export class StreamProcessManager extends EventEmitter {
       effort: this.mapEffort(options?.effort ?? instance.effort),
       persistSession: true,
       enableFileCheckpointing: true,
+      plugins: plugins.length > 0 ? plugins : undefined,
     };
 
     if (options?.model ?? instance.model) {
@@ -984,6 +1001,23 @@ export class StreamProcessManager extends EventEmitter {
   async killAll(): Promise<void> {
     const ids = Array.from(this.handles.keys());
     await Promise.all(ids.map(id => this.kill(id)));
+  }
+
+  /** Shut down all instances without emitting exit events (for graceful restart) */
+  async shutdownAll(): Promise<void> {
+    for (const [id, handle] of this.handles) {
+      if (handle.conversation) handle.conversation.close();
+      if (handle.inputController) handle.inputController.end();
+      if (handle.pendingPermission) {
+        handle.pendingPermission.resolve({ behavior: 'deny', message: 'Server shutting down' });
+        handle.pendingPermission = null;
+      }
+      if (handle.pendingUserQuestion) {
+        handle.pendingUserQuestion.resolve({ behavior: 'deny', message: 'Server shutting down' });
+        handle.pendingUserQuestion = null;
+      }
+      this.handles.delete(id);
+    }
   }
 
   /**
