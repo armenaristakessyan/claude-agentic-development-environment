@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
-import { fork, type ChildProcess } from 'child_process';
+import { fork, execSync, type ChildProcess } from 'child_process';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -8,6 +8,16 @@ let backendProcess: ChildProcess | null = null;
 let isQuitting = false;
 
 const isDev = process.env.NODE_ENV === 'development';
+
+/** Resolve the user's full shell PATH — Electron launched from Finder doesn't inherit it */
+function getShellPath(): string {
+  try {
+    const userShell = process.env.SHELL || '/bin/zsh';
+    return execSync(`${userShell} -ilc 'echo $PATH'`, { encoding: 'utf-8' }).trim();
+  } catch {
+    return process.env.PATH || '/usr/local/bin:/usr/bin:/bin';
+  }
+}
 
 function getIconPath(): string {
   if (isDev) {
@@ -32,6 +42,7 @@ function startBackend(): Promise<number> {
 
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
+      PATH: isDev ? (process.env.PATH || '') : getShellPath(),
       PORT: '0', // Let OS pick a free port
       ELECTRON: '1',
     };
@@ -82,7 +93,19 @@ function startBackend(): Promise<number> {
   });
 }
 
-function createWindow(port: number): void {
+const LOADING_HTML = `
+<html>
+<head><style>
+  body { margin:0; background:#0a0a0a; display:flex; align-items:center; justify-content:center; height:100vh; font-family:-apple-system,system-ui,sans-serif; -webkit-app-region:drag; }
+  .container { text-align:center; }
+  .spinner { width:28px; height:28px; border:2.5px solid #333; border-top-color:#666; border-radius:50%; animation:spin .8s linear infinite; margin:0 auto 16px; }
+  .text { color:#555; font-size:13px; letter-spacing:0.3px; }
+  @keyframes spin { to { transform:rotate(360deg) } }
+</style></head>
+<body><div class="container"><div class="spinner"></div><div class="text">Starting ADE...</div></div></body>
+</html>`;
+
+function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -99,12 +122,8 @@ function createWindow(port: number): void {
     },
   });
 
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadURL(`http://localhost:${port}`);
-  }
+  // Show loading screen immediately
+  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(LOADING_HTML)}`);
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http')) {
@@ -123,6 +142,16 @@ function createWindow(port: number): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+function loadApp(port: number): void {
+  if (!mainWindow) return;
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.webContents.openDevTools();
+  } else {
+    mainWindow.loadURL(`http://localhost:${port}`);
+  }
 }
 
 function createTray(): void {
@@ -173,10 +202,11 @@ app.on('before-quit', () => {
 });
 
 app.whenReady().then(async () => {
+  createWindow();
+  createTray();
   try {
     const port = await startBackend();
-    createWindow(port);
-    createTray();
+    loadApp(port);
   } catch (err) {
     console.error('[electron] Failed to start:', err);
     app.quit();
