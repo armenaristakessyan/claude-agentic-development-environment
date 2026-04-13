@@ -174,15 +174,15 @@ export function FileTreeView({
             <div key={node.path}>
               <button
                 onClick={() => onToggle(node.path)}
-                className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left transition-colors hover:bg-hover"
+                className="flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors hover:bg-hover"
                 style={{ paddingLeft: `${depth * 12 + 4}px` }}
               >
                 {isExpanded
-                  ? <ChevronDown className="h-3 w-3 shrink-0 text-faint" />
-                  : <ChevronRight className="h-3 w-3 shrink-0 text-faint" />
+                  ? <ChevronDown className="h-4 w-4 shrink-0 text-faint" />
+                  : <ChevronRight className="h-4 w-4 shrink-0 text-faint" />
                 }
-                <Folder className={`h-3 w-3 shrink-0 ${isExpanded ? 'text-tertiary' : 'text-muted'}`} />
-                <span className="truncate text-[11px] text-tertiary">{node.name}</span>
+                <Folder className={`h-4 w-4 shrink-0 ${isExpanded ? 'text-tertiary' : 'text-muted'}`} />
+                <span className="truncate text-[13px] text-tertiary">{node.name}</span>
               </button>
               {isExpanded && node.children && (
                 <FileTreeView
@@ -202,14 +202,14 @@ export function FileTreeView({
           <button
             key={node.path}
             onClick={() => onSelect(node.path)}
-            className={`flex w-full items-center gap-1 rounded px-1 py-0.5 text-left transition-colors ${
+            className={`flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors ${
               selectedFile === node.path ? 'bg-blue-500/15 text-primary' : 'text-tertiary hover:bg-hover'
             }`}
             style={{ paddingLeft: `${depth * 12 + 4}px` }}
           >
-            <span className="w-3 shrink-0" />
-            <FileIcon fileName={node.name} />
-            <span className="truncate text-[11px]">{node.name}</span>
+            <span className="w-4 shrink-0" />
+            <FileIcon fileName={node.name} className="h-4 w-4 shrink-0" />
+            <span className="truncate text-[13px]">{node.name}</span>
           </button>
         );
       })}

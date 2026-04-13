@@ -525,19 +525,19 @@ function ExplorerPanel({
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Project name header */}
       <div className="shrink-0 px-3 py-2">
-        <div className="truncate text-[11px] font-medium text-muted">{projectName}</div>
-        <div className="truncate text-[10px] text-faint">{shortenPath(projectPath)}</div>
+        <div className="truncate text-[13px] font-medium text-muted">{projectName}</div>
+        <div className="truncate text-[12px] text-faint">{shortenPath(projectPath)}</div>
       </div>
 
       {/* Search */}
-      <div className="relative shrink-0 px-3 pb-1.5">
-        <Search className="absolute left-5 top-1.5 h-3 w-3 text-faint" />
+      <div className="relative shrink-0 px-3 pb-2">
+        <Search className="absolute left-5 top-2 h-3.5 w-3.5 text-faint" />
         <input
           type="text"
           placeholder="Filter files..."
           value={filter}
           onChange={e => setFilter(e.target.value)}
-          className="w-full rounded bg-elevated/30 py-1 pl-6 pr-2 text-[11px] text-tertiary placeholder-placeholder outline-none transition-colors focus:bg-elevated/50"
+          className="w-full rounded bg-elevated/30 py-1.5 pl-7 pr-2 text-[13px] text-tertiary placeholder-placeholder outline-none transition-colors focus:bg-elevated/30"
         />
       </div>
 
@@ -559,8 +559,8 @@ function ExplorerPanel({
                   selectedFile === f ? 'bg-blue-500/15 text-primary' : 'text-tertiary hover:bg-hover'
                 }`}
               >
-                <FileIcon fileName={f} />
-                <span className="min-w-0 flex-1 truncate text-[11px]">{f}</span>
+                <FileIcon fileName={f} className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate text-[13px]">{f}</span>
               </button>
             ))
           )
