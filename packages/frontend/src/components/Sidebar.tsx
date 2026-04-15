@@ -1,5 +1,5 @@
-import { RefreshCw, FolderPlus, LayoutList, GitBranch, FileDiff, Store, Shield, ChevronDown, ChevronRight, Loader, TextSearch, Search, Folder } from 'lucide-react';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { RefreshCw, FolderPlus, LayoutList, GitBranch, FileDiff, Store, Shield, ChevronDown, ChevronRight, Loader, TextSearch, Search, Folder, TerminalSquare } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ProjectList from './ProjectList';
 import MarketplacePanel from './MarketplacePanel';
 import { buildFileTree, FileTreeView, FileIcon } from './FileViewerPanel';
@@ -23,6 +23,7 @@ interface SidebarProps {
   onOpenScanPaths: () => void;
   onOpenTaskChanges?: (instanceId: string) => void;
   onOpenFileViewer?: (projectPath: string, projectName: string, filePath?: string) => void;
+  onOpenTerminal?: () => void;
   width: number;
   collapsed: boolean;
   onExpand: () => void;
@@ -33,7 +34,7 @@ function shortenPath(fullPath: string): string {
   return home;
 }
 
-export default function Sidebar({
+const Sidebar = React.memo(function Sidebar({
   projects,
   projectsLoading,
   projectsRefreshing,
@@ -45,6 +46,7 @@ export default function Sidebar({
   onOpenScanPaths,
   onOpenTaskChanges,
   onOpenFileViewer,
+  onOpenTerminal,
   selectedInstanceId,
   width,
   collapsed,
@@ -90,6 +92,14 @@ export default function Sidebar({
           title="Marketplace"
         >
           <Store className="h-4 w-4" />
+        </button>
+        <div className="mx-1 my-0.5 h-px w-5 bg-neutral-500/20" />
+        <button
+          onClick={() => onOpenTerminal?.()}
+          className="rounded p-2 text-faint transition-colors hover:bg-elevated/30 hover:text-tertiary"
+          title="Terminal"
+        >
+          <TerminalSquare className="h-4 w-4" />
         </button>
         <div className="flex-1" />
         <button
@@ -147,6 +157,14 @@ export default function Sidebar({
         >
           <Store className="h-3.5 w-3.5 shrink-0" />
           {tab === 'marketplace' && <span>Marketplace</span>}
+        </button>
+        <div className="mx-0.5 h-4 w-px bg-neutral-500/20" />
+        <button
+          onClick={() => onOpenTerminal?.()}
+          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-faint transition-colors hover:text-tertiary"
+          title="Terminal"
+        >
+          <TerminalSquare className="h-3.5 w-3.5 shrink-0" />
         </button>
 
         <div className="flex-1" />
@@ -238,7 +256,9 @@ export default function Sidebar({
       )}
     </aside>
   );
-}
+});
+
+export default Sidebar;
 
 // --- Permissions Panel ---
 

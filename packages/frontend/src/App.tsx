@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar';
 import ResizeHandle from './components/ResizeHandle';
 import ChatView from './components/ChatView';
 import TaskChangesPanel from './components/TaskChangesPanel';
+import TerminalPanel from './components/TerminalPanel';
 import CodeSearchModal from './components/CodeSearchModal';
 import ScanPathsModal from './components/ScanPathsModal';
 import LaunchModal from './components/LaunchModal';
@@ -279,6 +280,8 @@ export default function App() {
   const [scrollToLine, setScrollToLine] = useState<number | undefined>(undefined);
   const [codeSearchOpen, setCodeSearchOpen] = useState(false);
   const [codeSelection, setCodeSelection] = useState<{ filePath: string; startLine: number; endLine: number; code: string } | null>(null);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalWidth, setTerminalWidth] = useState(480);
 
   // The panel is open if either tab is open
   const panelInstanceId = changesInstanceId ?? viewerInstanceId;
@@ -294,6 +297,18 @@ export default function App() {
 
   const handleChangesResize = useCallback((delta: number) => {
     setChangesWidth(prev => Math.min(900, Math.max(320, prev + delta)));
+  }, []);
+
+  const handleTerminalResize = useCallback((delta: number) => {
+    setTerminalWidth(prev => Math.min(900, Math.max(320, prev + delta)));
+  }, []);
+
+  const handleOpenTerminal = useCallback(() => {
+    setTerminalOpen(prev => !prev);
+  }, []);
+
+  const handleCloseTerminal = useCallback(() => {
+    setTerminalOpen(false);
   }, []);
 
   const handleOpenTaskChanges = useCallback((instanceId: string) => {
@@ -347,6 +362,35 @@ export default function App() {
     if (!selectedInstance) return;
     const projectPath = selectedInstance.worktreePath ?? selectedInstance.projectPath;
     handleOpenFileViewer(projectPath, selectedInstance.projectName, filePath, line);
+  }, [selectedInstance, handleOpenFileViewer]);
+
+  // Stable callbacks for memoized children (avoids breaking React.memo on every render)
+  const handleNewTask = useCallback(() => setNewTaskOpen(true), []);
+  const handleClearCodeSelection = useCallback(() => setCodeSelection(null), []);
+  const handleScrollDone = useCallback(() => setScrollToLine(undefined), []);
+  const handleOpenScanPaths = useCallback(() => setScanPathsOpen(true), []);
+  const handleExpandRight = useCallback(() => setRightOpen(true), []);
+  const handleOpenFile = useCallback((filePath: string) => {
+    setOpenFiles(prev => prev.includes(filePath) ? prev : [...prev, filePath]);
+    setActiveFileTab(filePath);
+  }, []);
+  const handleCodeClick = useCallback(async (filePath: string, line?: number) => {
+    if (!selectedInstance) return;
+    const projectPath = selectedInstance.worktreePath ?? selectedInstance.projectPath;
+    if (filePath.includes('/')) {
+      handleOpenFileViewer(projectPath, selectedInstance.projectName, filePath, line);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/projects/files?path=${encodeURIComponent(projectPath)}`);
+      if (!res.ok) return;
+      const data = await res.json() as { files: string[] };
+      const fileName = filePath.toLowerCase();
+      const match = data.files.find(f => f.toLowerCase().endsWith(`/${fileName}`) || f.toLowerCase() === fileName);
+      if (match) {
+        handleOpenFileViewer(projectPath, selectedInstance.projectName, match, line);
+      }
+    } catch { /* skip */ }
   }, [selectedInstance, handleOpenFileViewer]);
 
   return (
@@ -447,7 +491,7 @@ export default function App() {
               agentTasks={agentTasks}
               onSelect={setSelectedInstanceId}
               onKill={handleKill}
-              onNewTask={() => setNewTaskOpen(true)}
+              onNewTask={handleNewTask}
               onResumeTask={handleResumeTask}
               onRemoveTask={handleRemoveTask}
               width={leftWidth}
@@ -473,7 +517,8 @@ export default function App() {
               onDraftChange={handleDraftChange}
               rateLimitInfo={rateLimitInfo}
               codeSelection={codeSelection}
-              onClearCodeSelection={() => setCodeSelection(null)}
+              onClearCodeSelection={handleClearCodeSelection}
+              onCodeClick={handleCodeClick}
             />
           ) : (
             <div className="flex h-full items-center justify-center">
@@ -511,8 +556,21 @@ export default function App() {
               onSelectFileTab={setActiveFileTab}
               showChanges={showChanges}
               scrollToLine={scrollToLine}
-              onScrollDone={() => setScrollToLine(undefined)}
+              onScrollDone={handleScrollDone}
               onCodeSelect={setCodeSelection}
+              onOpenFile={handleOpenFile}
+            />
+          </>
+        )}
+
+        {/* Terminal panel */}
+        {terminalOpen && (
+          <>
+            <ResizeHandle side="right" onResize={handleTerminalResize} />
+            <TerminalPanel
+              width={terminalWidth}
+              cwd={selectedInstance?.worktreePath ?? selectedInstance?.projectPath}
+              onClose={handleCloseTerminal}
             />
           </>
         )}
@@ -530,12 +588,13 @@ export default function App() {
           onRefreshProjects={refreshProjects}
           onLaunchProject={handleLaunch}
           onDeleteWorktree={handleDeleteWorktree}
-          onOpenScanPaths={() => setScanPathsOpen(true)}
+          onOpenScanPaths={handleOpenScanPaths}
           onOpenTaskChanges={handleOpenTaskChanges}
           onOpenFileViewer={handleOpenFileViewer}
+          onOpenTerminal={handleOpenTerminal}
           width={rightWidth}
           collapsed={!rightOpen}
-          onExpand={() => setRightOpen(true)}
+          onExpand={handleExpandRight}
         />
       </div>
 

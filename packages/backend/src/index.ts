@@ -13,6 +13,7 @@ import { createRoutes } from './routes.js';
 import { setupStreamSocketHandlers } from './stream-socket.js';
 import { MarketplaceService } from './marketplace.js';
 import { RtkService } from './rtk-service.js';
+import { ShellTerminalService, setupShellTerminalHandlers } from './shell-terminal.js';
 
 export interface ServerHandle {
   httpServer: HttpServer;
@@ -72,8 +73,12 @@ export async function startServer(options?: { port?: number; staticDir?: string 
     });
   }
 
+  // Shell terminal service
+  const shellTerminal = new ShellTerminalService();
+
   // WebSocket
   setupStreamSocketHandlers(io, streamProcess, taskStore);
+  setupShellTerminalHandlers(io, shellTerminal);
 
   // Initial project scan
   scanner.scan().catch(err => {
@@ -147,6 +152,7 @@ export async function startServer(options?: { port?: number; staticDir?: string 
     }
     shuttingDown = true;
     console.log('[server] Shutting down...');
+    shellTerminal.destroyAll();
     await streamProcess.shutdownAll();
     httpServer.close();
   };
