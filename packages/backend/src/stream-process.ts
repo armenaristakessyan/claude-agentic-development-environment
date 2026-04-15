@@ -66,6 +66,8 @@ interface StreamInstance {
   totalOutputTokens: number;
   effort: string | null;
   permissionMode: string | null;
+  tools: string[] | null;
+  mcpServers: { name: string; status: string }[] | null;
 }
 
 interface SpawnOptions {
@@ -255,6 +257,8 @@ export class StreamProcessManager extends EventEmitter {
       totalOutputTokens: options.totalOutputTokens ?? 0,
       effort: options.effort ?? null,
       permissionMode: options.permissionMode ?? null,
+      tools: null,
+      mcpServers: null,
     };
 
     const handle: ProcessHandle = {
@@ -589,6 +593,8 @@ export class StreamProcessManager extends EventEmitter {
           if (msg.session_id) instance.sessionId = msg.session_id;
           if (msg.model) instance.model = msg.model;
           if (msg.permissionMode) instance.permissionMode = msg.permissionMode;
+          if (msg.tools) instance.tools = msg.tools;
+          if (msg.mcp_servers) instance.mcpServers = msg.mcp_servers;
           if (msg.slash_commands) {
             this.cachedSlashCommands = msg.slash_commands;
           }
@@ -1005,6 +1011,9 @@ export class StreamProcessManager extends EventEmitter {
 
   /** Shut down all instances without emitting exit events (for graceful restart) */
   async shutdownAll(): Promise<void> {
+    // Mark as shutting down so exited events don't persist task exit status
+    // (we want tasks to remain 'active' so they auto-resume on next startup)
+    this.shuttingDown = true;
     for (const [id, handle] of this.handles) {
       if (handle.conversation) handle.conversation.close();
       if (handle.inputController) handle.inputController.end();
@@ -1019,6 +1028,9 @@ export class StreamProcessManager extends EventEmitter {
       this.handles.delete(id);
     }
   }
+
+  /** True during graceful shutdown — prevents tasks from being marked as exited */
+  shuttingDown = false;
 
   /**
    * Wait for the current conversation turn to finish (if any).
@@ -1100,12 +1112,19 @@ export class StreamProcessManager extends EventEmitter {
 
       const blocks: ContentBlock[] = [];
 
+      // Skip slash-command and internal SDK messages (stored with XML-like tags)
+      const isInternalMessage = (text: string) =>
+        /<command-name>/.test(text) || /<local-command-stdout>/.test(text) || /<command-message>/.test(text);
+
       if (typeof rawContent === 'string') {
-        blocks.push({ type: 'text', text: rawContent });
+        if (!isInternalMessage(rawContent)) {
+          blocks.push({ type: 'text', text: rawContent });
+        }
       } else if (Array.isArray(rawContent)) {
         for (const block of rawContent) {
           const b = block as Record<string, unknown>;
           if (b.type === 'text') {
+            if (isInternalMessage(b.text as string)) continue;
             blocks.push({ type: 'text', text: b.text as string });
           } else if (b.type === 'thinking') {
             blocks.push({ type: 'thinking', thinking: b.thinking as string });
