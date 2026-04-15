@@ -19,6 +19,17 @@ interface ShellSession {
 
 const MAX_BUFFER = 256 * 1024; // 256KB scrollback
 
+function resolveShell(): string {
+  if (process.env.SHELL) return process.env.SHELL;
+  // Electron launched from Finder may not have SHELL set
+  const candidates = ['/bin/zsh', '/bin/bash', '/bin/sh'];
+  const fs = require('fs') as typeof import('fs');
+  for (const c of candidates) {
+    try { fs.accessSync(c, fs.constants.X_OK); return c; } catch { /* skip */ }
+  }
+  return '/bin/zsh';
+}
+
 function buildShellEnv(): Record<string, string> {
   const env = { ...process.env } as Record<string, string>;
   const extraPaths = [
@@ -34,6 +45,7 @@ function buildShellEnv(): Record<string, string> {
     }
   }
   env.PATH = pathParts.join(':');
+  env.SHELL = resolveShell();
   // Force color support
   env.COLORTERM = 'truecolor';
   env.TERM = 'xterm-256color';
@@ -45,7 +57,7 @@ export class ShellTerminalService extends EventEmitter {
 
   create(cwd?: string): ShellSession {
     const id = randomUUID();
-    const shell = process.env.SHELL ?? '/bin/zsh';
+    const shell = resolveShell();
     const resolvedCwd = cwd ?? os.homedir();
 
     const ptyProcess = pty.spawn(shell, ['-l'], {
@@ -140,11 +152,16 @@ export function setupShellTerminalHandlers(io: Server, service: ShellTerminalSer
 
   io.on('connection', (socket: Socket) => {
     // Create a new shell session
-    socket.on('shell:create', ({ cwd }: { cwd?: string }, callback?: (res: { sessionId: string }) => void) => {
-      const session = service.create(cwd);
-      socket.join(`shell:${session.id}`);
-      session.clients.add(socket.id);
-      if (callback) callback({ sessionId: session.id });
+    socket.on('shell:create', ({ cwd }: { cwd?: string }, callback?: (res: { sessionId?: string; error?: string }) => void) => {
+      try {
+        const session = service.create(cwd);
+        socket.join(`shell:${session.id}`);
+        session.clients.add(socket.id);
+        if (callback) callback({ sessionId: session.id });
+      } catch (err) {
+        console.log('[shell-terminal] Failed to create session:', err);
+        if (callback) callback({ error: err instanceof Error ? err.message : 'Failed to create shell' });
+      }
     });
 
     // Attach to an existing session

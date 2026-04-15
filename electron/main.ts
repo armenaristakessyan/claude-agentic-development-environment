@@ -43,6 +43,7 @@ function startBackend(): Promise<number> {
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       PATH: isDev ? (process.env.PATH || '') : getShellPath(),
+      SHELL: process.env.SHELL || '/bin/zsh',
       PORT: '0', // Let OS pick a free port
       ELECTRON: '1',
     };

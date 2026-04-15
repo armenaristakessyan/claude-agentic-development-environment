@@ -84,7 +84,12 @@ const TerminalPanel = React.memo(function TerminalPanel({ width, cwd, onClose }:
   const createSession = useCallback((cwd?: string) => {
     counterRef.current += 1;
     const index = counterRef.current;
-    socket.emit('shell:create', { cwd }, (res: { sessionId: string }) => {
+    socket.emit('shell:create', { cwd }, (res: { sessionId?: string; error?: string }) => {
+      if (!res.sessionId) {
+        console.error('[TerminalPanel] Failed to create shell:', res.error);
+        counterRef.current -= 1;
+        return;
+      }
       const newTab: ShellTab = { id: res.sessionId, index };
       setTabs(prev => [...prev, newTab]);
       setActiveTab(res.sessionId);
