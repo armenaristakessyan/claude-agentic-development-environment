@@ -126,9 +126,12 @@ export function setupStreamSocketHandlers(
   // Forward exit — broadcast to ALL clients
   streamProcess.on('exited', (instanceId: string, exitCode: number) => {
     io.emit('instance:exited', { instanceId, exitCode });
-    taskStore.markExited(instanceId).catch(err => {
-      console.log('[stream-socket] Failed to persist task exit:', err);
-    });
+    // During graceful shutdown, keep tasks as 'active' so they auto-resume on next startup
+    if (!streamProcess.shuttingDown) {
+      taskStore.markExited(instanceId).catch(err => {
+        console.log('[stream-socket] Failed to persist task exit:', err);
+      });
+    }
   });
 
   io.on('connection', (socket: Socket) => {

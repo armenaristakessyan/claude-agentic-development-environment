@@ -1,7 +1,9 @@
-import { X, ChevronDown, ChevronRight, Loader, FileDiff, RefreshCw, Undo2, GitBranch, ArrowUpRight, GitMerge, Trash2, Check, AlertTriangle, Copy } from 'lucide-react';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { X, ChevronDown, ChevronRight, Loader, FileDiff, RefreshCw, Undo2, GitBranch, ArrowUpRight, GitMerge, Trash2, Check, AlertTriangle, Copy, Eye, Code } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useTheme } from '../contexts/ThemeContext';
 import type { Instance } from '../types';
 import type { GitChange } from './Sidebar';
@@ -33,9 +35,10 @@ interface TaskChangesPanelProps {
   scrollToLine?: number;
   onScrollDone?: () => void;
   onCodeSelect?: (selection: { filePath: string; startLine: number; endLine: number; code: string }) => void;
+  onOpenFile?: (filePath: string) => void;
 }
 
-export default function TaskChangesPanel({ instanceId, instances, width, onClose, onCloseChanges, onCloseFile, onCloseAllFiles, onDeleteWorktree, openFiles, activeFileTab, onSelectFileTab, showChanges, scrollToLine, onScrollDone, onCodeSelect }: TaskChangesPanelProps) {
+const TaskChangesPanel = React.memo(function TaskChangesPanel({ instanceId, instances, width, onClose, onCloseChanges, onCloseFile, onCloseAllFiles, onDeleteWorktree, openFiles, activeFileTab, onSelectFileTab, showChanges, scrollToLine, onScrollDone, onCodeSelect, onOpenFile }: TaskChangesPanelProps) {
   const { theme } = useTheme();
   const hasFiles = openFiles.length > 0;
   const [activePanel, setActivePanel] = useState<'changes' | 'file'>(hasFiles && !showChanges ? 'file' : 'changes');
@@ -67,6 +70,7 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
   const [fileCache, setFileCache] = useState<Record<string, { content: string | null; loading: boolean; error: string | null }>>({});
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
+
 
   const instance = instances.find(i => i.id === instanceId);
   const isWorktree = !!instance?.worktreePath;
@@ -318,21 +322,44 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
     });
   }, [openFiles]);
 
-  // Scroll to specific line when requested
+  // Scroll to specific line when requested — retry until SyntaxHighlighter has rendered
   useEffect(() => {
     if (!scrollToLine || !activeFileTab || !viewerRef.current) return;
     const cached = fileCache[activeFileTab];
     if (!cached || cached.loading) return;
-    // Wait for SyntaxHighlighter to render, then scroll to the line
-    const timer = setTimeout(() => {
+
+    let attempts = 0;
+    const tryScroll = () => {
       const container = viewerRef.current;
       if (!container) return;
-      // SyntaxHighlighter renders lines as rows; approximate line height
-      const lineHeight = 18; // 12px font * 1.5 line-height
-      const targetY = (scrollToLine - 1) * lineHeight;
-      container.scrollTo({ top: Math.max(0, targetY - container.clientHeight / 3), behavior: 'smooth' });
+
+      // SyntaxHighlighter renders line numbers as spans with the line number text.
+      // Find the target line's DOM element by querying line number spans.
+      const lineSpans = container.querySelectorAll('.linenumber');
+      if (lineSpans.length === 0 && attempts < 10) {
+        // SyntaxHighlighter hasn't rendered yet — retry
+        attempts++;
+        setTimeout(tryScroll, 100);
+        return;
+      }
+
+      // Use the actual line element position if available
+      const targetSpan = lineSpans[scrollToLine - 1] as HTMLElement | undefined;
+      if (targetSpan) {
+        const containerRect = container.getBoundingClientRect();
+        const spanRect = targetSpan.getBoundingClientRect();
+        const offset = spanRect.top - containerRect.top + container.scrollTop;
+        container.scrollTo({ top: Math.max(0, offset - container.clientHeight / 3), behavior: 'smooth' });
+      } else {
+        // Fallback: approximate by line height
+        const lineHeight = 18;
+        const targetY = (scrollToLine - 1) * lineHeight;
+        container.scrollTo({ top: Math.max(0, targetY - container.clientHeight / 3), behavior: 'smooth' });
+      }
       onScrollDone?.();
-    }, 100);
+    };
+
+    const timer = setTimeout(tryScroll, 50);
     return () => clearTimeout(timer);
   }, [scrollToLine, activeFileTab, fileCache]);
 
@@ -418,6 +445,8 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
   const activeFileCached = activeFileTab ? fileCache[activeFileTab] : null;
   const activeFileLanguage = activeFileTab ? detectLanguage(activeFileTab) : 'text';
   const activeFileLineCount = activeFileCached?.content ? activeFileCached.content.split('\n').length : 0;
+  const isMarkdownFile = activeFileLanguage === 'markdown' || activeFileLanguage === 'mdx';
+  const [markdownPreview, setMarkdownPreview] = useState(false);
 
   // Auto-switch panel when one side closes
   useEffect(() => {
@@ -726,6 +755,15 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
             {activeFileCached?.content != null && (
               <span className="shrink-0 text-[10px] text-faint">{activeFileLineCount} lines</span>
             )}
+            {isMarkdownFile && activeFileCached?.content != null && (
+              <button
+                onClick={() => setMarkdownPreview(prev => !prev)}
+                className="shrink-0 rounded p-1 text-faint transition-colors hover:text-tertiary"
+                title={markdownPreview ? 'View source' : 'Preview markdown'}
+              >
+                {markdownPreview ? <Code className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </button>
+            )}
             <button onClick={() => handleFileCopy(activeFileTab)} className="shrink-0 rounded p-1 text-faint transition-colors hover:text-tertiary" title="Copy file content">
               {copiedFile === activeFileTab ? <Check className="h-3 w-3 text-green-400" /> : <Copy className="h-3 w-3" />}
             </button>
@@ -739,23 +777,137 @@ export default function TaskChangesPanel({ instanceId, instances, width, onClose
             ) : activeFileCached?.error ? (
               <div className="px-4 py-8 text-center text-[12px] text-rose-300">{activeFileCached.error}</div>
             ) : activeFileCached?.content != null ? (
-              <SyntaxHighlighter
-                style={theme === 'dark' ? oneDark : oneLight}
-                language={activeFileLanguage}
-                showLineNumbers
-                lineNumberStyle={{ minWidth: '3em', paddingRight: '1em', color: 'var(--text-faint)', userSelect: 'none' }}
-                customStyle={{ margin: 0, padding: '8px 0', background: 'transparent', fontSize: '12px', lineHeight: '1.5' }}
-                codeTagProps={{ style: { background: 'transparent' } }}
-              >
-                {activeFileCached.content}
-              </SyntaxHighlighter>
+              isMarkdownFile && markdownPreview ? (
+                <MarkdownFilePreview content={activeFileCached.content} currentFilePath={activeFileTab} onOpenFile={onOpenFile} />
+              ) : (
+                <MemoizedFileViewer content={activeFileCached.content} language={activeFileLanguage} theme={theme} />
+              )
             ) : null}
           </div>
         </>
       )}
     </div>
   );
-}
+});
+
+export default TaskChangesPanel;
+
+// --- Memoized file viewer — prevents SyntaxHighlighter re-render on parent width changes ---
+
+const MemoizedFileViewer = React.memo(function MemoizedFileViewer({ content, language, theme }: {
+  content: string; language: string; theme: 'dark' | 'light';
+}) {
+  return (
+    <SyntaxHighlighter
+      style={theme === 'dark' ? oneDark : oneLight}
+      language={language}
+      showLineNumbers
+      lineNumberStyle={{ minWidth: '3em', paddingRight: '1em', color: 'var(--text-faint)', userSelect: 'none' }}
+      customStyle={{ margin: 0, padding: '8px 0', background: 'transparent', fontSize: '12px', lineHeight: '1.5' }}
+      codeTagProps={{ style: { background: 'transparent' } }}
+    >
+      {content}
+    </SyntaxHighlighter>
+  );
+});
+
+// --- Markdown file preview ---
+
+const MarkdownFilePreview = React.memo(function MarkdownFilePreview({ content, currentFilePath, onOpenFile }: { content: string; currentFilePath: string; onOpenFile?: (filePath: string) => void }) {
+  const { theme } = useTheme();
+
+  const handleLinkClick = useCallback((e: React.MouseEvent<HTMLAnchorElement>, href: string | undefined) => {
+    if (!href) return;
+    // External links — open in new tab
+    if (/^https?:\/\//.test(href)) {
+      e.preventDefault();
+      window.open(href, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    // Anchor links — ignore
+    if (href.startsWith('#')) return;
+    // Relative file link — resolve relative to current file's directory
+    e.preventDefault();
+    if (!onOpenFile) return;
+    const currentDir = currentFilePath.includes('/') ? currentFilePath.slice(0, currentFilePath.lastIndexOf('/')) : '';
+    // Resolve the relative path
+    const parts = (currentDir ? `${currentDir}/${href}` : href).split('/');
+    const resolved: string[] = [];
+    for (const p of parts) {
+      if (p === '.' || p === '') continue;
+      if (p === '..') { resolved.pop(); continue; }
+      resolved.push(p);
+    }
+    onOpenFile(resolved.join('/'));
+  }, [currentFilePath, onOpenFile]);
+
+  return (
+    <div className="px-6 py-4 text-[13px] leading-relaxed text-secondary">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code({ className, children, node, ...props }) {
+            const match = /language-(\w+)/.exec(className ?? '');
+            const codeString = String(children).replace(/\n$/, '');
+            if (match) {
+              return (
+                <div className="my-2 overflow-hidden rounded-lg border border-border-default">
+                  <SyntaxHighlighter
+                    style={theme === 'dark' ? oneDark : oneLight}
+                    language={match[1]}
+                    customStyle={{ margin: 0, padding: '12px 16px', background: 'transparent', fontSize: '12px', lineHeight: '1.5' }}
+                    codeTagProps={{ style: { background: 'transparent' } }}
+                  >
+                    {codeString}
+                  </SyntaxHighlighter>
+                </div>
+              );
+            }
+            // Unfenced code block (inside <pre>) — preserve whitespace with mono font
+            const isBlock = node?.position && codeString.includes('\n');
+            if (isBlock) {
+              return (
+                <div className="my-2 overflow-hidden rounded-lg border border-border-default">
+                  <SyntaxHighlighter
+                    style={theme === 'dark' ? oneDark : oneLight}
+                    language="text"
+                    customStyle={{ margin: 0, padding: '12px 16px', background: 'transparent', fontSize: '12px', lineHeight: '1.5' }}
+                    codeTagProps={{ style: { background: 'transparent' } }}
+                  >
+                    {codeString}
+                  </SyntaxHighlighter>
+                </div>
+              );
+            }
+            return <code className="rounded bg-elevated px-1.5 py-0.5 text-[12px] text-tertiary" {...props}>{children}</code>;
+          },
+          pre({ children }) { return <>{children}</>; },
+          p({ children }) { return <p className="mb-3 last:mb-0">{children}</p>; },
+          ul({ children }) { return <ul className="mb-3 ml-4 list-disc space-y-1 text-secondary">{children}</ul>; },
+          ol({ children }) { return <ol className="mb-3 ml-4 list-decimal space-y-1 text-secondary">{children}</ol>; },
+          li({ children }) { return <li className="text-secondary">{children}</li>; },
+          h1({ children }) { return <h1 className="mb-3 mt-5 border-b border-border-default pb-2 text-[20px] font-semibold text-primary">{children}</h1>; },
+          h2({ children }) { return <h2 className="mb-2 mt-4 border-b border-border-default pb-1.5 text-[17px] font-semibold text-primary">{children}</h2>; },
+          h3({ children }) { return <h3 className="mb-2 mt-3 text-[15px] font-semibold text-primary">{children}</h3>; },
+          h4({ children }) { return <h4 className="mb-1 mt-2 text-[14px] font-semibold text-primary">{children}</h4>; },
+          a({ href, children }) {
+            return <a href={href ?? '#'} onClick={e => handleLinkClick(e, href)} className="text-blue-300 underline decoration-blue-400/30 hover:decoration-blue-400 cursor-pointer">{children}</a>;
+          },
+          blockquote({ children }) { return <blockquote className="mb-3 border-l-2 border-border-default pl-3 text-tertiary">{children}</blockquote>; },
+          table({ children }) { return <div className="mb-3 overflow-x-auto"><table className="w-full border-collapse text-[12px]">{children}</table></div>; },
+          th({ children }) { return <th className="border border-border-input bg-hover px-3 py-1.5 text-left text-secondary">{children}</th>; },
+          td({ children }) { return <td className="border border-border-input px-3 py-1.5 text-tertiary">{children}</td>; },
+          hr() { return <hr className="my-4 border-border-default" />; },
+          strong({ children }) { return <strong className="font-semibold text-primary">{children}</strong>; },
+          em({ children }) { return <em className="text-tertiary">{children}</em>; },
+          img({ src, alt }) { return <img src={src} alt={alt ?? ''} className="my-2 max-w-full rounded" />; },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+});
 
 // --- Inline diff viewer with line numbers ---
 

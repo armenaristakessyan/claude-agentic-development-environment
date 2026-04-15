@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Plus, Search, Trash2, Play, X, Clock, Bot, Loader } from 'lucide-react';
 import type { Instance, InstanceStatus, AgentTask } from '../types';
 import type { StoredTask } from '../hooks/useTaskHistory';
@@ -31,7 +31,7 @@ const STATUS_DOT: Record<InstanceStatus, string> = {
   exited: 'bg-neutral-600',
 };
 
-export default function TaskSidebar({
+const TaskSidebar = React.memo(function TaskSidebar({
   instances,
   selectedId,
   queuedIds,
@@ -252,7 +252,7 @@ export default function TaskSidebar({
             <div className="flex flex-col gap-px">
               {filteredHistory.map(task => {
                 const label = task.taskDescription || task.projectName;
-                const canResume = !!task.worktreePath && task.worktreeExists === true;
+                const canResume = (!!task.worktreePath && task.worktreeExists === true) || !!task.sessionId;
 
                 return (
                   <div
@@ -280,7 +280,7 @@ export default function TaskSidebar({
                         <button
                           onClick={() => onResumeTask(task.id)}
                           className="rounded p-1 text-faint hover:text-emerald-300"
-                          title="Resume in worktree"
+                          title="Resume session"
                         >
                           <Play className="h-3 w-3" />
                         </button>
@@ -365,7 +365,9 @@ export default function TaskSidebar({
       )}
     </aside>
   );
-}
+});
+
+export default TaskSidebar;
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M tokens`;

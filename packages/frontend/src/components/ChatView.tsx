@@ -109,6 +109,7 @@ interface ChatViewProps {
   rateLimitInfo?: { status: string; resetsAt?: number; rateLimitType?: string } | null;
   codeSelection?: CodeSelection | null;
   onClearCodeSelection?: () => void;
+  onCodeClick?: (filePath: string, line?: number) => void;
 }
 
 /** Map a full model ID (e.g. "claude-sonnet-4-6") back to our short key */
@@ -119,8 +120,9 @@ function modelIdToKey(modelId: string | null | undefined): string {
   return 'opus';
 }
 
-export default function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, initialPermissionMode, draft, onDraftChange, rateLimitInfo, codeSelection, onClearCodeSelection }: ChatViewProps) {
+function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, initialPermissionMode, draft, onDraftChange, rateLimitInfo, codeSelection, onClearCodeSelection, onCodeClick }: ChatViewProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(true);
   const [streamingBlocks, setStreamingBlocks] = useState<ContentBlock[]>([]);
   const [localInput, setLocalInput] = useState('');
   const input = draft ?? localInput;
@@ -262,11 +264,30 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const socket = useSocket();
 
-  // Fetch message history on mount
+  // Fetch message history and session info on mount
   useEffect(() => {
     fetch(`/api/instances/${instanceId}/messages`)
       .then(r => r.json())
       .then((msgs: ChatMessage[]) => setMessages(msgs))
+      .catch(() => {})
+      .finally(() => setMessagesLoading(false));
+    // Seed session info (tools, MCP servers) from instance state
+    fetch(`/api/instances`)
+      .then(r => r.ok ? r.json() as Promise<Array<{ id: string; tools?: string[]; mcpServers?: { name: string; status: string }[]; sessionId?: string; model?: string; permissionMode?: string }>> : null)
+      .then(all => {
+        const inst = all?.find(i => i.id === instanceId);
+        if (inst && (inst.tools || inst.mcpServers)) {
+          setSessionInfo(prev => ({
+            sessionId: inst.sessionId ?? prev?.sessionId ?? null,
+            model: inst.model ?? prev?.model ?? null,
+            tools: inst.tools ?? prev?.tools,
+            mcpServers: inst.mcpServers ?? prev?.mcpServers,
+            permissionMode: inst.permissionMode ?? prev?.permissionMode,
+            cliVersion: prev?.cliVersion,
+            slashCommands: prev?.slashCommands,
+          }));
+        }
+      })
       .catch(() => {});
   }, [instanceId]);
 
@@ -375,9 +396,6 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       setSending(false);
       resetStreamingState();
     };
-
-    // Join instance room for scoped events
-    socket.emit('instance:join', { instanceId });
 
     const onPermissionRequest = ({ instanceId: id, toolName, toolInput, toolUseId }: {
       instanceId: string; toolName: string; toolInput: unknown; toolUseId: string;
@@ -526,6 +544,37 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     socket.on('chat:user_question', onUserQuestion);
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
+
+    // Join instance room AFTER listeners are registered to avoid race
+    // condition where the server re-emits pending state before the
+    // frontend has attached its handlers.
+    socket.emit('instance:join', { instanceId });
+
+    // Belt-and-suspenders: also fetch pending state via REST in case the
+    // socket re-emit was still missed (e.g. event loop delay).
+    fetch(`/api/instances/${instanceId}/pending`)
+      .then(r => r.ok ? r.json() as Promise<{
+        pendingPermission: { toolName: string; toolInput: unknown; toolUseId: string } | null;
+        pendingUserQuestion: { toolUseId: string; questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; allowMultiple?: boolean }> } | null;
+      }> : null)
+      .then(state => {
+        if (!state) return;
+        if (state.pendingPermission) {
+          setPermissionQueue(prev => {
+            if (prev.some(p => p.toolUseId === state.pendingPermission!.toolUseId)) return prev;
+            return [...prev, state.pendingPermission!];
+          });
+          setSending(true);
+        }
+        if (state.pendingUserQuestion) {
+          setPendingQuestion(prev => {
+            if (prev?.toolUseId === state.pendingUserQuestion!.toolUseId) return prev;
+            return state.pendingUserQuestion;
+          });
+          setSending(true);
+        }
+      })
+      .catch(() => {});
 
     return () => {
       socket.emit('instance:leave', { instanceId });
@@ -795,6 +844,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
     const prompt = input.trim();
     if (!prompt) return;
     setInput('');
+    if (inputRef.current) inputRef.current.style.height = '20px';
     setLastError(null);
     lastPromptRef.current = prompt;
 
@@ -883,7 +933,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       if (e.key === 'ArrowDown') { e.preventDefault(); setAcIndex(prev => Math.min(prev + 1, acMatches.length - 1)); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); setAcIndex(prev => Math.max(prev - 1, 0)); return; }
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); if (acMatches[acIndex]) setInput(`/${acMatches[acIndex].raw} `); return; }
-      if (e.key === 'Escape') { e.preventDefault(); setInput(''); return; }
+      if (e.key === 'Escape') { e.preventDefault(); setInput(''); if (inputRef.current) inputRef.current.style.height = '20px'; return; }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
@@ -954,13 +1004,17 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-4">
         {messages.length === 0 && streamingBlocks.length === 0 && !isProcessing && !streamingText && (
           <div className="flex h-full items-center justify-center">
-            <p className="text-[13px] text-faint">Start a conversation...</p>
+            {messagesLoading ? (
+              <Loader className="h-4 w-4 animate-spin text-faint" />
+            ) : (
+              <p className="text-[13px] text-faint">Start a conversation...</p>
+            )}
           </div>
         )}
 
         <div className="mx-auto max-w-3xl space-y-5">
           {messages.map((msg, i) => (
-            <MessageBubble key={`${msg.role}-${msg.timestamp}-${i}`} message={msg} />
+            <MessageBubble key={`${msg.role}-${msg.timestamp}-${i}`} message={msg} onCodeClick={onCodeClick} />
           ))}
 
           {/* Live streaming — chronological block rendering */}
@@ -972,6 +1026,7 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
               thinkingText={thinkingText}
               toolProgress={toolProgress}
               processingPhase={processingPhase}
+              onCodeClick={onCodeClick}
             />
           )}
 
@@ -1347,6 +1402,8 @@ export default function ChatView({ instanceId, status, sendRef, initialModel, in
   );
 }
 
+export default React.memo(ChatView);
+
 // --- Tool actions header: shows last action label when processing ---
 
 // --- Live "Working" block shown during processing (chronological order) ---
@@ -1358,6 +1415,7 @@ function LiveWorkingBlock({
   thinkingText,
   toolProgress,
   processingPhase,
+  onCodeClick,
 }: {
   blocks: ContentBlock[];
   isProcessing: boolean;
@@ -1365,6 +1423,7 @@ function LiveWorkingBlock({
   thinkingText: string;
   toolProgress: { toolName: string; elapsedSeconds: number } | null;
   processingPhase: 'connecting' | 'thinking' | 'working' | 'streaming' | null;
+  onCodeClick?: (filePath: string, line?: number) => void;
 }) {
   const hasStreamingText = streamingText.length > 0;
   const hasThinking = thinkingText.length > 0;
@@ -1407,7 +1466,7 @@ function LiveWorkingBlock({
         }
 
         if (group.type === 'text') {
-          return <TextBlock key={`g-${i}`} text={group.text} />;
+          return <TextBlock key={`g-${i}`} text={group.text} onCodeClick={onCodeClick} />;
         }
 
         return null;
@@ -1436,7 +1495,7 @@ function LiveWorkingBlock({
               <span className="inline-block h-4 w-0.5 animate-pulse bg-blue-400 align-text-bottom ml-0.5" />
             </pre>
           ) : (
-            <TextBlock text={streamingText} />
+            <TextBlock text={streamingText} onCodeClick={onCodeClick} />
           )}
         </div>
       )}
@@ -1571,7 +1630,7 @@ function RateLimitCountdown({ resetsAt }: { resetsAt: number }) {
 
 // --- Message bubble (memoized to avoid re-rendering on streaming state changes) ---
 
-const MessageBubble = React.memo(function MessageBubble({ message }: { message: ChatMessage }) {
+const MessageBubble = React.memo(function MessageBubble({ message, onCodeClick }: { message: ChatMessage; onCodeClick?: (filePath: string, line?: number) => void }) {
   const isUser = message.role === 'user';
   const hasOnlyToolResult = message.content.every(b => b.type === 'tool_result');
   if (hasOnlyToolResult) return null;
@@ -1580,8 +1639,8 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
     const text = message.content.find(b => b.type === 'text')?.text ?? '';
     const attachments = message.contextAttachments;
     return (
-      <div className="flex justify-end">
-        <div className="max-w-[80%] space-y-1.5 rounded-2xl rounded-br-sm bg-input px-4 py-2.5">
+      <div className="flex justify-end overflow-hidden">
+        <div className="min-w-0 max-w-[80%] space-y-1.5 rounded-2xl rounded-br-sm bg-input px-4 py-2.5">
           {attachments && attachments.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {attachments.map((att, i) => (
@@ -1595,7 +1654,7 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
               ))}
             </div>
           )}
-          <p className="text-[14px] leading-relaxed text-primary">{text}</p>
+          <p className="whitespace-pre-wrap break-words text-[14px] leading-relaxed text-primary" style={{ overflowWrap: 'anywhere' }}>{text}</p>
         </div>
       </div>
     );
@@ -1606,7 +1665,7 @@ const MessageBubble = React.memo(function MessageBubble({ message }: { message: 
   return (
     <div className="space-y-3">
       {groups.map((group, i) => {
-        if (group.type === 'text') return <TextBlock key={i} text={group.text} />;
+        if (group.type === 'text') return <TextBlock key={i} text={group.text} onCodeClick={onCodeClick} />;
         if (group.type === 'thinking') return <ThinkingBlock key={i} thinking={group.thinking} />;
         if (group.type === 'tool_group') return <ProcessedGroup key={i} tools={group.tools} />;
         return null;
@@ -2973,16 +3032,55 @@ function McpServersList({ sessionInfo }: { sessionInfo?: SessionInfo | null }) {
 
 // --- Markdown text block ---
 
-function TextBlock({ text }: { text: string }) {
+// Detect file path patterns in inline code:
+//  - Paths with separators: src/foo.ts, DataIntegration.Infra/Repo.cs, foo\bar.py:42
+//  - Bare filenames with known extensions: BankConnectionRepository.cs, index.ts
+const FILE_EXTS = /\.(ts|tsx|js|jsx|py|rb|rs|go|java|kt|cs|swift|c|cpp|h|hpp|css|scss|html|json|yaml|yml|toml|xml|sql|sh|md|mdx|proto|lua|php|dart|zig|ex|exs|erl|hs|ml|tf|vue|svelte|graphql|gql)$/;
+const FILE_PATH_RE = /^\.?\.?(?:[\w@.+-]+[/\\])+[\w@.+-]+(?::(\d+)(?:-\d+)?)?$/;
+
+function isCodeFilePath(text: string): { filePath: string; line?: number } | null {
+  // Path with at least one separator: src/foo.ts, Data.Infra/Repo.cs:42
+  const pathMatch = FILE_PATH_RE.exec(text);
+  if (pathMatch) {
+    const line = pathMatch[1] ? parseInt(pathMatch[1], 10) : undefined;
+    const filePath = text.replace(/:(\d+)(-\d+)?$/, '').replace(/\\/g, '/');
+    return { filePath, line };
+  }
+  // Bare filename with known extension: BankConnectionRepository.cs
+  const bare = text.replace(/:(\d+)(-\d+)?$/, '');
+  if (FILE_EXTS.test(bare) && !bare.includes(' ')) {
+    const lineMatch = /:(\d+)/.exec(text);
+    return { filePath: bare, line: lineMatch ? parseInt(lineMatch[1], 10) : undefined };
+  }
+  return null;
+}
+
+function TextBlock({ text, onCodeClick }: { text: string; onCodeClick?: (filePath: string, line?: number) => void }) {
   return (
     <div className="prose-custom text-[14px] leading-relaxed text-secondary">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          code({ className, children, ...props }) {
+          code({ className, children, node, ...props }) {
             const match = /language-(\w+)/.exec(className ?? '');
             const codeString = String(children).replace(/\n$/, '');
+            // Fenced code block with language
             if (match) return <CodeBlock language={match[1]} code={codeString} />;
+            // Unfenced code block (inside <pre>) — preserve whitespace with mono font
+            const isBlock = node?.position && codeString.includes('\n');
+            if (isBlock) return <CodeBlock language="text" code={codeString} />;
+            // Clickable file path in inline code
+            const fileRef = onCodeClick ? isCodeFilePath(codeString) : null;
+            if (fileRef) {
+              return (
+                <code
+                  className="cursor-pointer rounded bg-elevated px-1.5 py-0.5 text-[13px] text-blue-300 transition-colors hover:bg-blue-500/15 hover:text-blue-200"
+                  onClick={() => onCodeClick!(fileRef.filePath, fileRef.line)}
+                  title={`Open ${fileRef.filePath}${fileRef.line ? ` at line ${fileRef.line}` : ''}`}
+                  {...props}
+                >{children}</code>
+              );
+            }
             return <code className="rounded bg-elevated px-1.5 py-0.5 text-[13px] text-tertiary" {...props}>{children}</code>;
           },
           pre({ children }) { return <>{children}</>; },

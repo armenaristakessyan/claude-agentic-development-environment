@@ -179,6 +179,7 @@ export function createRoutes(
     }
   });
 
+
   router.delete('/api/instances/:id', async (req, res) => {
     const deleteWorktree = req.query.deleteWorktree === 'true';
 
@@ -689,21 +690,27 @@ export function createRoutes(
   router.post('/api/tasks/:id/resume', async (req, res) => {
     const tasks = taskStore.getAll();
     const task = tasks.find(t => t.id === req.params.id);
-    if (!task || !task.worktreePath) {
-      res.status(404).json({ error: 'Task not found or has no worktree' });
+    if (!task) {
+      res.status(404).json({ error: 'Task not found' });
       return;
     }
 
-    if (!existsSync(task.worktreePath)) {
-      res.status(410).json({ error: 'Worktree no longer exists on disk' });
+    // Determine the working directory: worktree if it exists, otherwise project path
+    const cwd = task.worktreePath && existsSync(task.worktreePath)
+      ? task.worktreePath
+      : task.projectPath;
+
+    if (!existsSync(cwd)) {
+      res.status(410).json({ error: 'Project directory no longer exists on disk' });
       return;
     }
 
     try {
+      const isWorktree = task.worktreePath && existsSync(task.worktreePath);
       const instance = await processManager.createInstance({
-        projectPath: task.worktreePath,
+        projectPath: isWorktree ? task.worktreePath! : task.projectPath,
         taskDescription: task.taskDescription ?? undefined,
-        worktreePath: task.worktreePath,
+        worktreePath: isWorktree ? task.worktreePath! : undefined,
         parentProjectPath: task.parentProjectPath ?? undefined,
         branchName: task.branchName ?? undefined,
         continueSession: true,
