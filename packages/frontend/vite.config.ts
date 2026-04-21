@@ -17,11 +17,16 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(rootPkg.version),
   },
-  // For Electron, output to electron/dist/renderer so electron-builder can bundle it
-  build: isElectron ? {
-    outDir: '../../electron/dist/renderer',
-    emptyOutDir: true,
-  } : undefined,
+  // Use terser for minification — esbuild mangles xterm.js's compiled const-enum
+  // IIFE in requestMode (CSI DECRQM), causing a ReferenceError when TUIs like the
+  // claude CLI query terminal capabilities on startup.
+  build: {
+    minify: 'terser',
+    ...(isElectron ? {
+      outDir: '../../electron/dist/renderer',
+      emptyOutDir: true,
+    } : {}),
+  },
   plugins: [
     react(),
     tailwindcss(),

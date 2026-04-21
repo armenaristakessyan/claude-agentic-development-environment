@@ -73,11 +73,14 @@ function resolveShell(): string {
 function buildShellEnv(): Record<string, string> {
   // Filter out undefined values — process.env can have them and
   // node-pty passes env to posix_spawnp which requires real strings.
+  // Also strip Agent SDK / Claude Code env vars: if claude CLI sees
+  // CLAUDE_AGENT_SDK_VERSION or CLAUDECODE in its env, it flips into
+  // SDK-controlled mode and waits for JSON on stdin instead of keys.
   const env: Record<string, string> = {};
   for (const [key, val] of Object.entries(process.env)) {
-    if (val !== undefined) {
-      env[key] = val;
-    }
+    if (val === undefined) continue;
+    if (key === 'CLAUDECODE' || key.startsWith('CLAUDE_CODE_') || key.startsWith('CLAUDE_AGENT_')) continue;
+    env[key] = val;
   }
   // Ensure standard paths exist (Electron from Finder has minimal PATH)
   const extraPaths = [
