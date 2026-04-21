@@ -68,9 +68,12 @@ function tabLabel(tab: ShellTab): string {
   return tab.index === 1 ? 'Terminal' : `Terminal (${tab.index})`;
 }
 
+const BASE_FONT_SIZE = 13;
+
 const TerminalPanel = React.memo(function TerminalPanel({ width, cwd, onClose }: TerminalPanelProps) {
   const socket = useSocket();
-  const { theme } = useTheme();
+  const { theme, zoom } = useTheme();
+  const zoomFactor = zoom / 100;
   const [tabs, setTabs] = useState<ShellTab[]>([]);
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -80,20 +83,27 @@ const TerminalPanel = React.memo(function TerminalPanel({ width, cwd, onClose }:
   const counterRef = useRef(0);
   const createdRef = useRef(false);
 
-  // Create a new shell session
-  const createSession = useCallback((cwd?: string) => {
-    counterRef.current += 1;
-    const index = counterRef.current;
-    socket.emit('shell:create', { cwd }, (res: { sessionId?: string; error?: string }) => {
-      if (!res.sessionId) {
-        console.error('[TerminalPanel] Failed to create shell:', res.error);
+  // Listen for shell:created events
+  useEffect(() => {
+    const onCreated = ({ sessionId, error }: { sessionId?: string; error?: string }) => {
+      if (!sessionId) {
+        console.error('[TerminalPanel] Failed to create shell:', error);
         counterRef.current -= 1;
         return;
       }
-      const newTab: ShellTab = { id: res.sessionId, index };
+      const index = counterRef.current;
+      const newTab: ShellTab = { id: sessionId, index };
       setTabs(prev => [...prev, newTab]);
-      setActiveTab(res.sessionId);
-    });
+      setActiveTab(sessionId);
+    };
+    socket.on('shell:created', onCreated);
+    return () => { socket.off('shell:created', onCreated); };
+  }, [socket]);
+
+  // Create a new shell session
+  const createSession = useCallback((cwd?: string) => {
+    counterRef.current += 1;
+    socket.emit('shell:create', { cwd });
   }, [socket]);
 
   // Destroy a session — close panel when last tab is removed
@@ -129,9 +139,16 @@ const TerminalPanel = React.memo(function TerminalPanel({ width, cwd, onClose }:
     const sessionId = activeTab;
     activeSessionRef.current = sessionId;
 
+    // Root `<html>` has CSS `zoom` applied (see ThemeContext). xterm.js maps
+    // pointer events → character cells using getBoundingClientRect and the
+    // canvas pixel dimensions; ancestor CSS `zoom` skews that math so the
+    // selection drifts further off the further you click from the origin.
+    // Two-part fix: (1) the terminal wrapper below cancels the ancestor zoom
+    // so xterm sees a 1× coordinate system; (2) we scale fontSize up by the
+    // same factor so the visible text size matches the rest of the UI.
     const term = new Terminal({
       cursorBlink: true,
-      fontSize: 13,
+      fontSize: BASE_FONT_SIZE * zoomFactor,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       theme: theme === 'dark' ? DARK_THEME : LIGHT_THEME,
       allowProposedApi: true,
@@ -206,7 +223,7 @@ const TerminalPanel = React.memo(function TerminalPanel({ width, cwd, onClose }:
       fitRef.current = null;
       activeSessionRef.current = null;
     };
-  }, [activeTab, socket, theme]);
+  }, [activeTab, socket, theme, zoomFactor]);
 
   return (
     <div className="flex h-full shrink-0 flex-col overflow-hidden rounded-xl bg-surface" style={{ width }}>
@@ -262,13 +279,20 @@ const TerminalPanel = React.memo(function TerminalPanel({ width, cwd, onClose }:
         </button>
       </div>
 
-      {/* Terminal container */}
+      {/* Terminal container. The outer div cancels the root CSS `zoom` so
+          xterm.js's pointer→cell math (based on getBoundingClientRect) is
+          exact — otherwise text selection offsets grow with zoom level. */}
       {activeTab ? (
         <div
-          ref={containerRef}
           className="flex-1 min-h-0"
-          style={{ padding: '2px 6px 6px' }}
-        />
+          style={{ zoom: 1 / zoomFactor }}
+        >
+          <div
+            ref={containerRef}
+            className="h-full w-full"
+            style={{ padding: '2px 6px 6px' }}
+          />
+        </div>
       ) : (
         <div className="flex flex-1 items-center justify-center">
           <button

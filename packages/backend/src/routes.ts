@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, basename, relative } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -86,6 +86,43 @@ export function createRoutes(
     }
   });
 
+  // Upload a file attachment for an instance. Writes the payload to
+  // ~/.claude-dashboard/uploads/<instanceId>/ and returns the absolute
+  // path — the frontend then attaches the path (not the content) to
+  // the next message so Claude can Read it on demand.
+  router.post('/api/instances/:id/upload', async (req, res) => {
+    const { filename, dataUrl } = req.body as { filename?: string; dataUrl?: string };
+    if (!filename || !dataUrl) {
+      res.status(400).json({ error: 'filename and dataUrl are required' });
+      return;
+    }
+    const instance = processManager.get(req.params.id);
+    if (!instance) {
+      res.status(404).json({ error: 'Instance not found' });
+      return;
+    }
+    try {
+      const uploadsDir = join(homedir(), '.claude-dashboard', 'uploads', req.params.id);
+      if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
+
+      // Sanitize: strip path separators + unsafe chars, cap length.
+      const safeName = basename(filename).replace(/[^\w.\- ]+/g, '_').slice(0, 180) || 'upload';
+      const unique = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
+      const absPath = join(uploadsDir, unique);
+
+      // Accept either a data URL (`data:<mime>;base64,<b64>`) or a bare base64 string.
+      const commaIdx = dataUrl.indexOf(',');
+      const b64 = commaIdx >= 0 && dataUrl.startsWith('data:') ? dataUrl.slice(commaIdx + 1) : dataUrl;
+      writeFileSync(absPath, Buffer.from(b64, 'base64'));
+
+      res.json({ path: absPath, filename: safeName });
+    } catch (err) {
+      console.log('[routes] Upload failed:', err);
+      const message = err instanceof Error ? err.message : 'Upload failed';
+      res.status(500).json({ error: message });
+    }
+  });
+
   // Send a message to an instance
   router.post('/api/instances/:id/messages', async (req, res) => {
     const { prompt, model, permissionMode, effort, context, hidden } = req.body as {
@@ -168,6 +205,7 @@ export function createRoutes(
         model: null,
         effort: null,
         permissionMode: null,
+        approvedTools: [],
         createdAt: instance.createdAt.toISOString(),
       });
 
@@ -356,7 +394,7 @@ export function createRoutes(
     if (!cwd) { res.status(404).json({ error: 'Instance not found' }); return; }
 
     try {
-      const statusOutput = execSync('git status --porcelain', {
+      const statusOutput = execSync('git status --porcelain --untracked-files=all', {
         cwd,
         encoding: 'utf-8',
         timeout: 5000,
@@ -673,6 +711,15 @@ export function createRoutes(
   router.delete('/api/tasks/:id', async (req, res) => {
     try {
       await taskStore.removeTask(req.params.id);
+      // Clean up any uploaded attachments for this task
+      const uploadsDir = join(homedir(), '.claude-dashboard', 'uploads', req.params.id);
+      if (existsSync(uploadsDir)) {
+        try {
+          rmSync(uploadsDir, { recursive: true, force: true });
+        } catch (err) {
+          console.log(`[routes] Failed to remove uploads dir ${uploadsDir}:`, err);
+        }
+      }
       res.json({ ok: true });
     } catch (err) {
       console.log('[routes] Error removing task:', err);
@@ -721,6 +768,8 @@ export function createRoutes(
         model: task.model ?? undefined,
         effort: task.effort ?? undefined,
         permissionMode: task.permissionMode ?? undefined,
+        createdAt: task.createdAt ? new Date(task.createdAt) : undefined,
+        approvedTools: task.approvedTools ?? [],
       });
 
       // Update task store with the new instance ID
@@ -739,7 +788,8 @@ export function createRoutes(
         model: task.model ?? null,
         effort: task.effort ?? null,
         permissionMode: task.permissionMode ?? null,
-        createdAt: new Date().toISOString(),
+        approvedTools: task.approvedTools ?? [],
+        createdAt: task.createdAt,
       });
 
       // Remove the old task entry
@@ -801,12 +851,50 @@ export function createRoutes(
     }
   });
 
+  // Revoke a previously-approved tool from the per-task allowlist
+  router.post('/api/instances/:id/revoke-tool', (req, res) => {
+    const { toolName } = req.body as { toolName?: string };
+    if (!toolName) {
+      res.status(400).json({ error: 'toolName is required' });
+      return;
+    }
+    processManager.revokeTool(req.params.id, toolName);
+    res.json({ ok: true });
+  });
+
   // Get pending permission request or user question for an instance
   // (used by frontend after reconnect to recover stalled UI)
   router.get('/api/instances/:id/pending', (req, res) => {
     const instance = processManager.get(req.params.id);
     if (!instance) { res.status(404).json({ error: 'Instance not found' }); return; }
     res.json(processManager.getPendingState(req.params.id));
+  });
+
+  // Resolve a pending permission request via REST — socket-independent path
+  // so approvals still work when the websocket has dropped/reset.
+  router.post('/api/instances/:id/resolve-permission', (req, res) => {
+    const instance = processManager.get(req.params.id);
+    if (!instance) { res.status(404).json({ error: 'Instance not found' }); return; }
+    const { toolUseId, allow, message } = req.body as { toolUseId?: string; allow?: boolean; message?: string };
+    if (!toolUseId || typeof allow !== 'boolean') {
+      res.status(400).json({ error: 'toolUseId and allow are required' });
+      return;
+    }
+    processManager.resolvePermission(req.params.id, toolUseId, allow, message);
+    res.json({ ok: true });
+  });
+
+  // Resolve a pending AskUserQuestion via REST — same rationale as above.
+  router.post('/api/instances/:id/resolve-question', (req, res) => {
+    const instance = processManager.get(req.params.id);
+    if (!instance) { res.status(404).json({ error: 'Instance not found' }); return; }
+    const { toolUseId, answer } = req.body as { toolUseId?: string; answer?: string };
+    if (!toolUseId || typeof answer !== 'string') {
+      res.status(400).json({ error: 'toolUseId and answer are required' });
+      return;
+    }
+    processManager.resolveUserQuestion(req.params.id, toolUseId, answer);
+    res.json({ ok: true });
   });
 
   // Read permissions from all scopes for an instance
@@ -1077,7 +1165,7 @@ export function createRoutes(
     }
   });
 
-  // Supported models — dynamic from SDK
+  // Supported models — dynamic from SDK (live conversation)
   router.get('/api/instances/:id/models', async (req, res) => {
     try {
       const models = await processManager.getSupportedModels(req.params.id);
@@ -1085,6 +1173,55 @@ export function createRoutes(
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to get models';
       res.status(500).json({ error: message });
+    }
+  });
+
+  // Supported models — global cached list (prefetched at startup).
+  // If the cache is empty (e.g. right after a backend restart), trigger
+  // the prefetch and wait for it so the first call returns real data.
+  router.get('/api/models', async (_req, res) => {
+    let models = processManager.getCachedSupportedModels();
+    if (!models || models.length === 0) {
+      try {
+        await processManager.prefetchSlashCommands();
+        models = processManager.getCachedSupportedModels();
+      } catch (err) {
+        console.log('[routes] /api/models prefetch failed:', err);
+      }
+    }
+    res.json(models ?? []);
+  });
+
+  // Per-task prefetch: one SDK query in the task's cwd returning both
+  // slash commands (project-local plugins) and supported models. Cached
+  // per-cwd so re-opening a task is instant. Used by the frontend to
+  // display a single loader while the chat view warms up.
+  router.get('/api/instances/:id/prefetch', async (req, res) => {
+    const instance = processManager.get(req.params.id);
+    if (!instance) { res.status(404).json({ error: 'Instance not found' }); return; }
+    const cwd = instance.worktreePath ?? instance.projectPath;
+    try {
+      const result = await processManager.prefetchForCwd(cwd);
+      res.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Prefetch failed';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Update per-instance settings (model / effort / permissionMode)
+  router.put('/api/instances/:id/settings', async (req, res) => {
+    const { model, effort, permissionMode } = req.body as {
+      model?: string;
+      effort?: string;
+      permissionMode?: string;
+    };
+    try {
+      await processManager.updateSettings(req.params.id, { model, effort, permissionMode });
+      res.json({ ok: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to update settings';
+      res.status(404).json({ error: message });
     }
   });
 
@@ -1226,11 +1363,11 @@ export function createRoutes(
     }
   });
 
-  router.post('/api/marketplace/plugins/:marketplace/:pluginName/install', async (req, res) => {
+  router.post('/api/marketplace/plugins/:marketplace/:pluginName/install', (req, res) => {
     try {
       marketplace.installPlugin(req.params.marketplace, req.params.pluginName);
-      // Await slash command refresh so new plugin commands are available immediately
-      await processManager.prefetchSlashCommands(true);
+      // MarketplaceService.emit('changed') invalidates the prefetch cache.
+      // Next task open lazily re-prefetches — no Claude spawn here.
       res.json({ ok: true });
     } catch (err) {
       console.log('[routes] Error installing plugin:', err);
@@ -1238,11 +1375,9 @@ export function createRoutes(
     }
   });
 
-  router.post('/api/marketplace/plugins/:marketplace/:pluginName/uninstall', async (req, res) => {
+  router.post('/api/marketplace/plugins/:marketplace/:pluginName/uninstall', (req, res) => {
     try {
       marketplace.uninstallPlugin(req.params.marketplace, req.params.pluginName);
-      // Await slash command refresh to remove uninstalled plugin commands
-      await processManager.prefetchSlashCommands(true);
       res.json({ ok: true });
     } catch (err) {
       console.log('[routes] Error uninstalling plugin:', err);

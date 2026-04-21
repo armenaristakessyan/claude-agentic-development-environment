@@ -1,4 +1,4 @@
-import { RefreshCw, FolderPlus, LayoutList, GitBranch, FileDiff, Store, Shield, ChevronDown, ChevronRight, Loader, TextSearch, Search, Folder, TerminalSquare } from 'lucide-react';
+import { RefreshCw, FolderPlus, LayoutList, GitBranch, FileDiff, Store, Shield, ChevronDown, ChevronRight, Loader, TextSearch, Search, Folder, TerminalSquare, X } from 'lucide-react';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ProjectList from './ProjectList';
 import MarketplacePanel from './MarketplacePanel';
@@ -64,7 +64,7 @@ const Sidebar = React.memo(function Sidebar({
   // Collapsed: thin icon strip
   if (collapsed) {
     return (
-      <aside className="flex h-full w-10 shrink-0 flex-col items-center rounded-xl bg-surface pt-2 gap-1">
+      <aside className="flex h-full w-10 shrink-0 flex-col items-center overflow-hidden rounded-xl bg-surface pt-2 gap-1 panel-transition">
         <button
           onClick={() => { onExpand(); setTab('files'); }}
           className={`rounded p-2 transition-colors hover:bg-elevated/30 hover:text-tertiary ${tab === 'files' ? 'text-tertiary' : 'text-faint'}`}
@@ -115,53 +115,53 @@ const Sidebar = React.memo(function Sidebar({
 
   // Expanded: full sidebar
   return (
-    <aside className="flex h-full shrink-0 flex-col rounded-xl bg-surface" style={{ width: `${width}px` }}>
+    <aside className="flex h-full shrink-0 flex-col overflow-hidden rounded-xl bg-surface panel-transition" style={{ width: `${width}px` }}>
       {/* Tab bar */}
-      <div className="flex h-10 items-center gap-0.5 px-2">
+      <div className="flex h-10 items-center gap-0.5 overflow-hidden px-2">
         <button
           onClick={() => setTab('files')}
           className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors ${
-            tab === 'files' ? 'text-secondary' : 'text-faint hover:text-tertiary'
+            tab === 'files' ? 'min-w-0 text-secondary' : 'shrink-0 text-faint hover:text-tertiary'
           }`}
           title="Projects"
         >
           <LayoutList className="h-3.5 w-3.5 shrink-0" />
-          {tab === 'files' && <span>Projects</span>}
+          {tab === 'files' && <span className="truncate">Projects</span>}
         </button>
         <button
           onClick={() => setTab('explorer')}
           className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors ${
-            tab === 'explorer' ? 'text-secondary' : 'text-faint hover:text-tertiary'
+            tab === 'explorer' ? 'min-w-0 text-secondary' : 'shrink-0 text-faint hover:text-tertiary'
           }`}
           title="Explorer"
         >
           <TextSearch className="h-3.5 w-3.5 shrink-0" />
-          {tab === 'explorer' && <span>Explorer</span>}
+          {tab === 'explorer' && <span className="truncate">Explorer</span>}
         </button>
         <button
           onClick={() => setTab('changes')}
           className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors ${
-            tab === 'changes' ? 'text-secondary' : 'text-faint hover:text-tertiary'
+            tab === 'changes' ? 'min-w-0 text-secondary' : 'shrink-0 text-faint hover:text-tertiary'
           }`}
           title="Changes"
         >
           <GitBranch className="h-3.5 w-3.5 shrink-0" />
-          {tab === 'changes' && <span>Changes</span>}
+          {tab === 'changes' && <span className="truncate">Changes</span>}
         </button>
         <button
           onClick={() => setTab('marketplace')}
           className={`flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors ${
-            tab === 'marketplace' ? 'text-secondary' : 'text-faint hover:text-tertiary'
+            tab === 'marketplace' ? 'min-w-0 text-secondary' : 'shrink-0 text-faint hover:text-tertiary'
           }`}
           title="Marketplace"
         >
           <Store className="h-3.5 w-3.5 shrink-0" />
-          {tab === 'marketplace' && <span>Marketplace</span>}
+          {tab === 'marketplace' && <span className="truncate">Marketplace</span>}
         </button>
-        <div className="mx-0.5 h-4 w-px bg-neutral-500/20" />
+        <div className="mx-0.5 h-4 w-px shrink-0 bg-neutral-500/20" />
         <button
           onClick={() => onOpenTerminal?.()}
-          className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-faint transition-colors hover:text-tertiary"
+          className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-faint transition-colors hover:text-tertiary"
           title="Terminal"
         >
           <TerminalSquare className="h-3.5 w-3.5 shrink-0" />
@@ -170,7 +170,7 @@ const Sidebar = React.memo(function Sidebar({
         <div className="flex-1" />
 
         {tab === 'files' && (
-          <div className="flex items-center gap-0.5">
+          <div className="flex shrink-0 items-center gap-0.5">
             <button
               onClick={onOpenScanPaths}
               className="rounded p-1.5 text-faint transition-colors hover:text-tertiary"
@@ -356,9 +356,27 @@ function PermissionsPanel({ instanceId, onClose }: { instanceId?: string | null;
                     {rules.map((rule, i) => (
                       <div
                         key={i}
-                        className={`rounded px-2 py-1 text-[11px] font-mono ${scope.bgColor} ${scope.color}`}
+                        className={`group flex items-center gap-2 rounded px-2 py-1 text-[11px] font-mono ${scope.bgColor} ${scope.color}`}
                       >
-                        {rule}
+                        <span className="flex-1 truncate">{rule}</span>
+                        {scope.key === 'session' && instanceId && (
+                          <button
+                            onClick={async () => {
+                              await fetch(`/api/instances/${instanceId}/revoke-tool`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ toolName: rule }),
+                              }).catch(() => {});
+                              setPermissions(prev => prev
+                                ? { ...prev, session: prev.session.filter(r => r !== rule) }
+                                : prev);
+                            }}
+                            className="shrink-0 rounded p-0.5 text-faint opacity-0 transition-opacity hover:text-rose-300 group-hover:opacity-100"
+                            title="Revoke"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -455,9 +473,9 @@ function GitChangesPanel({ instances, onOpenTaskChanges }: { instances: Instance
                   className="flex w-full items-center gap-2 rounded px-2 py-1 text-left transition-colors hover:bg-hover"
                 >
                   <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                    file.status === 'M' ? 'bg-amber-400' :
-                    file.status === 'A' || file.status === '??' ? 'bg-green-400' :
-                    file.status === 'D' ? 'bg-red-400' : 'bg-neutral-500'
+                    file.status === 'M' ? 'bg-amber-400 light:bg-amber-600' :
+                    file.status === 'A' || file.status === '??' ? 'bg-green-400 light:bg-green-600' :
+                    file.status === 'D' ? 'bg-red-400 light:bg-red-600' : 'bg-neutral-500'
                   }`} />
                   <FileDiff className="h-3 w-3 shrink-0 text-faint" />
                   <span className="min-w-0 flex-1 truncate text-[12px] text-tertiary">

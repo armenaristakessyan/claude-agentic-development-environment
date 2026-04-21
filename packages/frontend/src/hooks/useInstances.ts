@@ -99,5 +99,9 @@ export function useInstances() {
     }
   }, []);
 
-  return { instances, loading, spawnInstance, killInstance, refetch: fetchInstances };
+  const patchInstance = useCallback((id: string, patch: Partial<Instance>) => {
+    setInstances(prev => prev.map(inst => (inst.id === id ? { ...inst, ...patch } : inst)));
+  }, []);
+
+  return { instances, loading, spawnInstance, killInstance, refetch: fetchInstances, patchInstance };
 }

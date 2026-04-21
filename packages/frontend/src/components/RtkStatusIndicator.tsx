@@ -53,14 +53,14 @@ export default function RtkStatusIndicator({
     }
 
     return (
-      <span className="flex items-center gap-1.5 rounded-md bg-amber-950/30 px-2.5 py-0.5 text-[11px] text-amber-400/80">
+      <span className="flex items-center gap-1.5 rounded-md bg-amber-950/30 px-2.5 py-0.5 text-[11px] text-amber-400/80 light:bg-amber-100 light:text-amber-800">
         <Zap className="h-3 w-3" />
         RTK detected
-        <span className="text-amber-500/50">·</span>
+        <span className="text-amber-500/50 light:text-amber-700/60">·</span>
         <button
           onClick={onInstall}
           disabled={installing}
-          className="font-medium text-amber-300/90 transition-colors hover:text-amber-200 disabled:opacity-50"
+          className="font-medium text-amber-300/90 transition-colors hover:text-amber-200 light:text-amber-800 light:hover:text-amber-900 disabled:opacity-50"
         >
           {installing ? (
             <span className="flex items-center gap-1">
@@ -73,7 +73,7 @@ export default function RtkStatusIndicator({
         </button>
         <button
           onClick={onDismiss}
-          className="ml-1 text-amber-600/50 transition-colors hover:text-amber-400/80"
+          className="ml-1 text-amber-600/50 transition-colors hover:text-amber-400/80 light:text-amber-700/60 light:hover:text-amber-800"
         >
           <X className="h-3 w-3" />
         </button>

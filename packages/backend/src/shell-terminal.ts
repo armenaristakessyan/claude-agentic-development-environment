@@ -1,17 +1,58 @@
-import * as pty from 'node-pty';
 import os from 'os';
 import path from 'path';
+import fs from 'fs';
+import { createRequire } from 'module';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import type * as NodePty from 'node-pty';
 import type { Server, Socket } from 'socket.io';
 
 // ---------------------------------------------------------------------------
 // Shell Terminal Service — standalone shell PTYs (not tied to Claude instances)
 // ---------------------------------------------------------------------------
 
+const esmRequire = createRequire(import.meta.url);
+
+// On macOS, AMFI rejects posix_spawn(POSIX_SPAWN_CLOEXEC_DEFAULT) on
+// spawn-helper when it sits inside a sealed .app bundle — even with a valid
+// signature. When ADE_NATIVE_CACHE_DIR is set (packaged Electron), mirror
+// node-pty to that writable dir and load from there.
+function resolvePtyModule(): typeof NodePty {
+  const cacheDir = process.env.ADE_NATIVE_CACHE_DIR;
+  if (!cacheDir) {
+    return esmRequire('node-pty') as typeof NodePty;
+  }
+  const sourcePkg = esmRequire.resolve('node-pty/package.json');
+  const sourceDir = path.dirname(sourcePkg);
+  const { version } = esmRequire(sourcePkg) as { version: string };
+  const targetDir = path.join(cacheDir, 'node-pty');
+  const stampPath = path.join(cacheDir, 'node-pty.stamp');
+  const stamp = `${version}:${fs.statSync(sourcePkg).mtimeMs}`;
+  let stale = true;
+  try { stale = fs.readFileSync(stampPath, 'utf-8') !== stamp; } catch { /* missing = stale */ }
+  if (stale) {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.cpSync(sourceDir, targetDir, { recursive: true, dereference: true });
+    const archDir = path.join(targetDir, 'prebuilds', `${process.platform}-${process.arch}`);
+    if (fs.existsSync(archDir)) {
+      for (const f of fs.readdirSync(archDir)) {
+        if (f === 'spawn-helper' || f.endsWith('.node')) {
+          fs.chmodSync(path.join(archDir, f), 0o755);
+        }
+      }
+    }
+    fs.writeFileSync(stampPath, stamp);
+    console.log(`[shell-terminal] Mirrored node-pty ${version} → ${targetDir}`);
+  }
+  return esmRequire(path.join(targetDir, 'lib', 'index.js')) as typeof NodePty;
+}
+
+const pty = resolvePtyModule();
+
 interface ShellSession {
   id: string;
-  pty: pty.IPty;
+  pty: NodePty.IPty;
   cwd: string;
   buffer: string;
   clients: Set<string>; // socket IDs attached
@@ -23,7 +64,6 @@ function resolveShell(): string {
   if (process.env.SHELL) return process.env.SHELL;
   // Electron launched from Finder may not have SHELL set
   const candidates = ['/bin/zsh', '/bin/bash', '/bin/sh'];
-  const fs = require('fs') as typeof import('fs');
   for (const c of candidates) {
     try { fs.accessSync(c, fs.constants.X_OK); return c; } catch { /* skip */ }
   }
@@ -31,22 +71,34 @@ function resolveShell(): string {
 }
 
 function buildShellEnv(): Record<string, string> {
-  const env = { ...process.env } as Record<string, string>;
+  // Filter out undefined values — process.env can have them and
+  // node-pty passes env to posix_spawnp which requires real strings.
+  const env: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (val !== undefined) {
+      env[key] = val;
+    }
+  }
+  // Ensure standard paths exist (Electron from Finder has minimal PATH)
   const extraPaths = [
     path.join(os.homedir(), '.local', 'bin'),
-    '/usr/local/bin',
     '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
   ];
   const currentPath = env.PATH ?? '';
-  const pathParts = currentPath.split(':');
+  const pathParts = currentPath.split(':').filter(Boolean);
   for (const p of extraPaths) {
     if (!pathParts.includes(p)) {
-      pathParts.unshift(p);
+      pathParts.push(p);
     }
   }
   env.PATH = pathParts.join(':');
+  env.HOME = env.HOME ?? os.homedir();
   env.SHELL = resolveShell();
-  // Force color support
   env.COLORTERM = 'truecolor';
   env.TERM = 'xterm-256color';
   return env;
@@ -58,15 +110,34 @@ export class ShellTerminalService extends EventEmitter {
   create(cwd?: string): ShellSession {
     const id = randomUUID();
     const shell = resolveShell();
-    const resolvedCwd = cwd ?? os.homedir();
+    const env = buildShellEnv();
+    const home = os.homedir();
+    // Validate cwd exists, fall back to home directory
+    let resolvedCwd = cwd && fs.existsSync(cwd) ? cwd : home;
+    if (!fs.existsSync(resolvedCwd)) resolvedCwd = '/tmp';
 
-    const ptyProcess = pty.spawn(shell, ['-l'], {
-      name: 'xterm-256color',
-      cols: 120,
-      rows: 30,
-      cwd: resolvedCwd,
-      env: buildShellEnv(),
-    });
+    console.log(`[shell-terminal] Spawning shell=${shell} cwd=${resolvedCwd} PATH=${env.PATH}`);
+
+    // Verify shell binary is accessible before attempting spawn
+    try {
+      fs.accessSync(shell, fs.constants.X_OK);
+    } catch {
+      console.error(`[shell-terminal] Shell binary not executable: ${shell}`);
+    }
+
+    let ptyProcess: NodePty.IPty;
+    try {
+      ptyProcess = pty.spawn(shell, [], {
+        name: 'xterm-256color',
+        cols: 120,
+        rows: 30,
+        cwd: resolvedCwd,
+        env,
+      });
+    } catch (err) {
+      console.error(`[shell-terminal] pty.spawn failed: shell=${shell} cwd=${resolvedCwd}`, err);
+      throw err;
+    }
 
     const session: ShellSession = {
       id,
@@ -152,15 +223,15 @@ export function setupShellTerminalHandlers(io: Server, service: ShellTerminalSer
 
   io.on('connection', (socket: Socket) => {
     // Create a new shell session
-    socket.on('shell:create', ({ cwd }: { cwd?: string }, callback?: (res: { sessionId?: string; error?: string }) => void) => {
+    socket.on('shell:create', ({ cwd }: { cwd?: string }) => {
       try {
         const session = service.create(cwd);
         socket.join(`shell:${session.id}`);
         session.clients.add(socket.id);
-        if (callback) callback({ sessionId: session.id });
+        socket.emit('shell:created', { sessionId: session.id });
       } catch (err) {
         console.log('[shell-terminal] Failed to create session:', err);
-        if (callback) callback({ error: err instanceof Error ? err.message : 'Failed to create shell' });
+        socket.emit('shell:created', { error: err instanceof Error ? err.message : 'Failed to create shell' });
       }
     });
 

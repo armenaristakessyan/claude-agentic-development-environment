@@ -1,8 +1,17 @@
 import { readFileSync, existsSync, readdirSync, writeFileSync, mkdirSync, rmSync, renameSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import yaml from 'js-yaml';
+
+// Git env to prevent credential prompts from hanging execSync on private repos
+const GIT_ENV: NodeJS.ProcessEnv = {
+  ...process.env,
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_ASKPASS: 'echo',
+  GCM_INTERACTIVE: 'Never',
+};
 
 // --- Types ---
 
@@ -114,7 +123,7 @@ const CACHE_TTL_MS = 60_000;
 
 // --- Service ---
 
-export class MarketplaceService {
+export class MarketplaceService extends EventEmitter {
   private pluginCache: CacheEntry<PluginMetadata[]> | null = null;
   private installCountsCache: Map<string, number> | null = null;
 
@@ -149,11 +158,9 @@ export class MarketplaceService {
   listMarketplaces(): MarketplaceInfo[] {
     const marketplaces = this.getMarketplaces();
     return Object.entries(marketplaces).map(([name, entry]) => {
-      let pluginCount = 0;
-      const pluginsDir = join(entry.installLocation, 'plugins');
-      if (existsSync(pluginsDir)) {
-        pluginCount = this.findAllPluginDirs(pluginsDir).length;
-      }
+      const pluginCount = existsSync(entry.installLocation)
+        ? this.discoverPluginDirs(entry.installLocation).length
+        : 0;
       return { name, source: entry.source, pluginCount, lastUpdated: entry.lastUpdated, autoUpdate: entry.autoUpdate ?? false };
     });
   }
@@ -166,44 +173,48 @@ export class MarketplaceService {
   addMarketplace(repoRef: string, autoUpdate = true): { name: string; pluginCount: number } {
     const { gitUrl, source } = this.parseRepoRef(repoRef);
 
-    // Clone to marketplaces directory
     const marketplacesDir = join(this.claudeDir, 'plugins', 'marketplaces');
     mkdirSync(marketplacesDir, { recursive: true });
 
-    // Determine marketplace name from marketplace.json after clone, or use repo name
     const tempName = source.repo?.split('/').pop() ?? repoRef.split('/').pop()?.replace(/\.git$/, '') ?? 'marketplace';
     const clonePath = join(marketplacesDir, tempName);
 
-    // Check if already cloned
-    if (existsSync(clonePath)) {
-      // Pull latest only if it's a git repo
-      if (existsSync(join(clonePath, '.git'))) {
-        try {
-          execSync('git pull --rebase', { cwd: clonePath, encoding: 'utf-8', timeout: 30_000 });
-          console.log(`[marketplace] Updated existing clone at ${clonePath}`);
-        } catch (err) {
-          console.log(`[marketplace] Failed to pull ${clonePath}:`, err);
-        }
+    // If we already have this marketplace registered (under its canonical name),
+    // reuse that clone instead of re-cloning. Prevents duplicate network hits
+    // when the marketplace's internal name differs from the repo name, or when
+    // the user re-adds an existing source.
+    const existingEntry = this.findExistingEntry(source, gitUrl);
+    const existingPath = existingEntry && existsSync(existingEntry.installLocation) && existsSync(join(existingEntry.installLocation, '.git'))
+      ? existingEntry.installLocation
+      : null;
+
+    const workingPath = existingPath ?? clonePath;
+
+    if (existsSync(workingPath)) {
+      if (existsSync(join(workingPath, '.git'))) {
+        this.fetchAndReset(workingPath);
       } else {
-        console.log(`[marketplace] ${clonePath} exists but is not a git repo, skipping pull`);
+        console.log(`[marketplace] ${workingPath} exists but is not a git repo, skipping fetch`);
       }
     } else {
-      // Clone
       try {
-        const refArgs = source.ref ? `--branch ${source.ref}` : '';
-        execSync(`git clone --depth 1 ${refArgs} ${gitUrl} ${clonePath}`, {
+        const refArgs = source.ref ? ['--branch', source.ref] : [];
+        const args = ['clone', '--depth', '1', ...refArgs, gitUrl, workingPath];
+        execSync(`git ${args.map(shellQuote).join(' ')}`, {
           encoding: 'utf-8',
-          timeout: 60_000,
+          timeout: 120_000,
+          env: GIT_ENV,
+          stdio: ['ignore', 'pipe', 'pipe'],
         });
-        console.log(`[marketplace] Cloned ${gitUrl} to ${clonePath}`);
+        console.log(`[marketplace] Cloned ${gitUrl} to ${workingPath}`);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         throw new Error(`Failed to clone ${gitUrl}: ${message}`);
       }
     }
 
-    // Parse marketplace.json to get the actual name
-    const marketplaceJsonPath = join(clonePath, '.claude-plugin', 'marketplace.json');
+    // Parse marketplace.json to get the canonical name
+    const marketplaceJsonPath = join(workingPath, '.claude-plugin', 'marketplace.json');
     let marketplaceName = tempName;
     let pluginCount = 0;
 
@@ -217,27 +228,23 @@ export class MarketplaceService {
       }
     }
 
-    // If marketplace name differs from directory name, check for conflict
-    const finalPath = marketplaceName !== tempName
-      ? join(marketplacesDir, marketplaceName)
-      : clonePath;
-
-    if (finalPath !== clonePath) {
-      if (existsSync(finalPath)) {
-        // Remove the temp clone, use existing
-        rmSync(clonePath, { recursive: true, force: true });
+    // If the clone lives at the temp (repo-name) path but should live under the
+    // canonical (marketplace.json) name, rename it once. Never clone twice.
+    const canonicalPath = join(marketplacesDir, marketplaceName);
+    let finalPath = workingPath;
+    if (workingPath !== canonicalPath) {
+      if (existsSync(canonicalPath)) {
+        // Canonical path already populated — prefer it and drop the temp dir
+        if (workingPath === clonePath) rmSync(clonePath, { recursive: true, force: true });
+        finalPath = canonicalPath;
       } else {
-        // Rename
-        renameSync(clonePath, finalPath);
+        renameSync(workingPath, canonicalPath);
+        finalPath = canonicalPath;
       }
     }
 
     // Count plugins from filesystem too (marketplace.json might not list all)
-    const pluginsDir = join(finalPath, 'plugins');
-    if (existsSync(pluginsDir)) {
-      const fsDirs = this.findAllPluginDirs(pluginsDir);
-      pluginCount = Math.max(pluginCount, fsDirs.length);
-    }
+    pluginCount = Math.max(pluginCount, this.discoverPluginDirs(finalPath).length);
 
     // Register in known_marketplaces.json
     const marketplaces = this.getMarketplaces();
@@ -251,6 +258,7 @@ export class MarketplaceService {
     this.invalidateCache();
 
     console.log(`[marketplace] Added marketplace: ${marketplaceName} (${pluginCount} plugins)`);
+    this.emit('changed', { reason: 'added', name: marketplaceName });
     return { name: marketplaceName, pluginCount };
   }
 
@@ -284,6 +292,7 @@ export class MarketplaceService {
     this.invalidateCache();
 
     console.log(`[marketplace] Removed marketplace: ${name}`);
+    this.emit('changed', { reason: 'removed', name });
   }
 
   setAutoUpdate(name: string, autoUpdate: boolean): void {
@@ -295,6 +304,23 @@ export class MarketplaceService {
     entry.autoUpdate = autoUpdate;
     this.writeMarketplacesFile(marketplaces);
     console.log(`[marketplace] Set autoUpdate=${autoUpdate} for ${name}`);
+    this.emit('changed', { reason: 'settings', name });
+  }
+
+  /**
+   * Find an already-registered marketplace that matches the requested source.
+   * Used to avoid re-cloning when a user re-adds an existing marketplace.
+   */
+  private findExistingEntry(source: MarketplaceSource, gitUrl: string): MarketplaceEntry | null {
+    const entries = this.getMarketplaces();
+    for (const entry of Object.values(entries)) {
+      const s = entry.source;
+      if (s.source === 'github' && source.source === 'github' && s.repo === source.repo) return entry;
+      if (s.source === 'url' && source.source === 'url' && s.url === source.url) return entry;
+      // Cross-match: a URL add that resolves to the same repo as a github-add
+      if (s.url === gitUrl || source.url === gitUrl) return entry;
+    }
+    return null;
   }
 
   private parseRepoRef(repoRef: string): { gitUrl: string; source: MarketplaceSource } {
@@ -408,6 +434,7 @@ export class MarketplaceService {
     this.writeSettings(settings);
     this.invalidateCache();
     console.log(`[marketplace] Installed plugin: ${key}`);
+    this.emit('changed', { reason: 'installed', marketplace, plugin: pluginName });
   }
 
   uninstallPlugin(marketplace: string, pluginName: string): void {
@@ -418,6 +445,7 @@ export class MarketplaceService {
     this.writeSettings(settings);
     this.invalidateCache();
     console.log(`[marketplace] Uninstalled plugin: ${key}`);
+    this.emit('changed', { reason: 'uninstalled', marketplace, plugin: pluginName });
   }
 
   getInstalledPlugins(): string[] {
@@ -442,13 +470,10 @@ export class MarketplaceService {
       const marketplaceName = key.slice(atIdx + 1);
 
       const entry = marketplaces[marketplaceName];
-      if (!entry) continue;
-
-      const pluginsDir = join(entry.installLocation, 'plugins');
-      if (!existsSync(pluginsDir)) continue;
+      if (!entry || !existsSync(entry.installLocation)) continue;
 
       // Search for the plugin directory by matching its .claude-plugin/plugin.json name
-      const allDirs = this.findAllPluginDirs(pluginsDir);
+      const allDirs = this.discoverPluginDirs(entry.installLocation);
       for (const { dir } of allDirs) {
         const manifestPath = join(dir, '.claude-plugin', 'plugin.json');
         if (!existsSync(manifestPath)) continue;
@@ -472,37 +497,80 @@ export class MarketplaceService {
    * If a specific marketplace name is given, refreshes only that one (regardless of autoUpdate).
    * If no name is given, refreshes all git-based marketplaces that have autoUpdate enabled.
    */
-  async refresh(marketplace?: string): Promise<void> {
+  /**
+   * Refresh marketplace repos. Only invoked by the user clicking "Refresh"
+   * in the UI — no background timer. If `marketplace` is given, refresh only
+   * that one; otherwise refresh every registered git-backed source.
+   */
+  async refresh(marketplace?: string): Promise<{ updated: string[]; failed: string[] }> {
     const marketplaces = this.getMarketplaces();
-    let updated = false;
+    const updated: string[] = [];
+    const failed: string[] = [];
 
     for (const [name, entry] of Object.entries(marketplaces)) {
       if (marketplace && name !== marketplace) continue;
 
-      // When refreshing all, only pull repos with autoUpdate enabled
-      if (!marketplace && !entry.autoUpdate) continue;
-
       const isGit = entry.source.source === 'github' || entry.source.source === 'url';
       if (isGit && existsSync(entry.installLocation) && existsSync(join(entry.installLocation, '.git'))) {
-        try {
-          execSync('git pull --rebase', {
-            cwd: entry.installLocation,
-            encoding: 'utf-8',
-            timeout: 30_000,
-          });
+        const ok = this.fetchAndReset(entry.installLocation);
+        if (ok) {
           entry.lastUpdated = new Date().toISOString();
-          updated = true;
+          updated.push(name);
           console.log(`[marketplace] Refreshed ${name}`);
-        } catch (err) {
-          console.log(`[marketplace] Failed to refresh ${name}:`, err);
+        } else {
+          failed.push(name);
         }
       }
     }
 
-    if (updated) {
+    if (updated.length > 0) {
       this.writeMarketplacesFile(marketplaces);
     }
     this.invalidateCache();
+    if (updated.length > 0 || failed.length > 0) {
+      this.emit('changed', { reason: 'refresh', updated, failed });
+    }
+    return { updated, failed };
+  }
+
+  /**
+   * Fast-forward a cloned repo to its upstream default branch.
+   * Uses fetch + reset --hard to survive a dirty working tree.
+   */
+  private fetchAndReset(repoPath: string): boolean {
+    try {
+      execSync('git fetch --depth 1 origin', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        timeout: 60_000,
+        env: GIT_ENV,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      // Determine the ref to reset to: remote HEAD, falling back to current branch
+      let ref = 'FETCH_HEAD';
+      try {
+        const remoteHead = execSync('git symbolic-ref --short refs/remotes/origin/HEAD', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          timeout: 10_000,
+          env: GIT_ENV,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+        if (remoteHead) ref = remoteHead;
+      } catch { /* stick with FETCH_HEAD */ }
+
+      execSync(`git reset --hard ${ref}`, {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        timeout: 30_000,
+        env: GIT_ENV,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return true;
+    } catch (err) {
+      console.log(`[marketplace] fetch/reset failed for ${repoPath}:`, err instanceof Error ? err.message : err);
+      return false;
+    }
   }
 
   // --- Private ---
@@ -529,10 +597,10 @@ export class MarketplaceService {
     const plugins: PluginMetadata[] = [];
 
     for (const [marketplaceName, entry] of Object.entries(marketplaces)) {
-      const pluginsDir = join(entry.installLocation, 'plugins');
-      if (!existsSync(pluginsDir)) continue;
+      if (!existsSync(entry.installLocation)) continue;
 
-      const pluginDirs = this.findAllPluginDirs(pluginsDir);
+      const pluginDirs = this.discoverPluginDirs(entry.installLocation);
+      const seen = new Set<string>();
 
       for (const { dir, segment } of pluginDirs) {
         try {
@@ -540,6 +608,9 @@ export class MarketplaceService {
           if (!existsSync(pluginJsonPath)) continue;
 
           const pluginJson: PluginJson = JSON.parse(readFileSync(pluginJsonPath, 'utf-8'));
+          if (!pluginJson.name || seen.has(pluginJson.name)) continue;
+          seen.add(pluginJson.name);
+
           const skills = this.discoverSkills(dir);
           const key = `${pluginJson.name}@${marketplaceName}`;
 
@@ -576,41 +647,97 @@ export class MarketplaceService {
     return plugins;
   }
 
-  private findAllPluginDirs(pluginsDir: string): Array<{ dir: string; segment?: string }> {
+  /**
+   * Discover all plugin directories for a marketplace installLocation.
+   * Primary source: .claude-plugin/marketplace.json's `plugins[].source`.
+   * Fallback: recursive filesystem walk rooted at `plugins/` (or pluginRoot).
+   */
+  private discoverPluginDirs(installLocation: string): Array<{ dir: string; segment?: string }> {
     const result: Array<{ dir: string; segment?: string }> = [];
+    const seen = new Set<string>();
+    const push = (dir: string, segment?: string) => {
+      if (seen.has(dir)) return;
+      seen.add(dir);
+      result.push({ dir, segment });
+    };
 
-    const entries = readdirSync(pluginsDir, { withFileTypes: true })
-      .filter(e => e.isDirectory() && !e.name.startsWith('.'));
-
-    for (const entry of entries) {
-      const entryPath = join(pluginsDir, entry.name);
-
-      // Direct plugin: has .claude-plugin/plugin.json
-      if (existsSync(join(entryPath, '.claude-plugin', 'plugin.json'))) {
-        result.push({ dir: entryPath });
-        continue;
-      }
-
-      // Segment directory: children are plugins or further nesting
-      const subEntries = readdirSync(entryPath, { withFileTypes: true })
-        .filter(e => e.isDirectory() && !e.name.startsWith('.'));
-
-      for (const sub of subEntries) {
-        const subPath = join(entryPath, sub.name);
-        if (existsSync(join(subPath, '.claude-plugin', 'plugin.json'))) {
-          result.push({ dir: subPath, segment: entry.name });
+    // Primary: read marketplace.json and resolve each plugin's `source` path
+    const marketplaceJsonPath = join(installLocation, '.claude-plugin', 'marketplace.json');
+    let pluginRoot = 'plugins';
+    if (existsSync(marketplaceJsonPath)) {
+      try {
+        const mJson = JSON.parse(readFileSync(marketplaceJsonPath, 'utf-8')) as MarketplaceJson;
+        if (typeof mJson.metadata?.pluginRoot === 'string') {
+          pluginRoot = mJson.metadata.pluginRoot.replace(/^\.\//, '');
         }
+        for (const p of mJson.plugins ?? []) {
+          const sourcePath = this.pluginSourceToPath(p.source, installLocation);
+          if (!sourcePath || !existsSync(join(sourcePath, '.claude-plugin', 'plugin.json'))) continue;
+          const segment = typeof p.category === 'string' ? p.category : undefined;
+          push(sourcePath, segment);
+        }
+      } catch (err) {
+        console.log(`[marketplace] Failed to parse ${marketplaceJsonPath}:`, err);
       }
+    }
+
+    // Fallback: recursive filesystem walk (max depth 4 from pluginsDir)
+    const pluginsDir = isAbsolute(pluginRoot) ? pluginRoot : join(installLocation, pluginRoot);
+    if (existsSync(pluginsDir)) {
+      this.walkForPlugins(pluginsDir, pluginsDir, 0, 4, push);
     }
 
     return result;
   }
 
-  private findPluginDir(installLocation: string, pluginName: string): string | null {
-    const pluginsDir = join(installLocation, 'plugins');
-    if (!existsSync(pluginsDir)) return null;
+  private pluginSourceToPath(
+    source: MarketplacePluginEntry['source'],
+    installLocation: string,
+  ): string | null {
+    if (typeof source === 'string') {
+      // Treat as a relative path within the marketplace repo
+      const rel = source.replace(/^\.\//, '');
+      return resolve(installLocation, rel);
+    }
+    if (source && typeof source === 'object' && source.path) {
+      const rel = source.path.replace(/^\.\//, '');
+      return resolve(installLocation, rel);
+    }
+    return null;
+  }
 
-    const allDirs = this.findAllPluginDirs(pluginsDir);
+  private walkForPlugins(
+    root: string,
+    dir: string,
+    depth: number,
+    maxDepth: number,
+    push: (dir: string, segment?: string) => void,
+  ): void {
+    if (depth > maxDepth) return;
+    let entries: import('node:fs').Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    // If this dir itself is a plugin, record it and stop descending
+    if (existsSync(join(dir, '.claude-plugin', 'plugin.json'))) {
+      const rel = dir === root ? '' : dir.slice(root.length + 1);
+      const segment = rel.includes('/') ? rel.split('/')[0] : undefined;
+      push(dir, segment);
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('.')) continue;
+      if (entry.name === 'node_modules' || entry.name === 'tests') continue;
+      this.walkForPlugins(root, join(dir, entry.name), depth + 1, maxDepth, push);
+    }
+  }
+
+  private findPluginDir(installLocation: string, pluginName: string): string | null {
+    if (!existsSync(installLocation)) return null;
+    const allDirs = this.discoverPluginDirs(installLocation);
     for (const { dir } of allDirs) {
       try {
         const pj = JSON.parse(readFileSync(join(dir, '.claude-plugin', 'plugin.json'), 'utf-8'));
@@ -707,4 +834,11 @@ export class MarketplaceService {
   private writeSettings(settings: Record<string, unknown>): void {
     writeFileSync(this.settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf-8');
   }
+}
+
+/** Quote a single argv token for a /bin/sh command line */
+function shellQuote(token: string): string {
+  if (token.length === 0) return "''";
+  if (/^[a-zA-Z0-9_./:@+=-]+$/.test(token)) return token;
+  return `'${token.replace(/'/g, `'\\''`)}'`;
 }

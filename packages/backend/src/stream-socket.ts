@@ -1,6 +1,7 @@
 import type { Server, Socket } from 'socket.io';
 import type { StreamProcessManager, ChatMessage, ContentBlock } from './stream-process.js';
 import type { TaskStore } from './task-store.js';
+import type { MarketplaceService } from './marketplace.js';
 
 function instanceRoom(instanceId: string): string {
   return `instance:${instanceId}`;
@@ -10,7 +11,13 @@ export function setupStreamSocketHandlers(
   io: Server,
   streamProcess: StreamProcessManager,
   taskStore: TaskStore,
+  marketplace?: MarketplaceService,
 ): void {
+  // Broadcast marketplace changes so all open clients refetch sources + plugins
+  marketplace?.on('changed', (detail: Record<string, unknown>) => {
+    io.emit('marketplace:updated', detail ?? {});
+  });
+
   // Forward real-time text streaming deltas — scoped to instance room
   streamProcess.on('stream_delta', (instanceId: string, data: {
     text?: string; thinking?: string; type?: string; blockType?: string; blockName?: string;
@@ -77,9 +84,14 @@ export function setupStreamSocketHandlers(
       });
     }
     if (data.model) {
-      taskStore.updateSettings(instanceId, { model: data.model }).catch(err => {
-        console.log('[stream-socket] Failed to persist model:', err);
-      });
+      // Only persist if the task has no model yet — don't overwrite the
+      // user's alias choice with the SDK's resolved model name.
+      const current = taskStore.getAll().find(t => t.id === instanceId);
+      if (current && !current.model) {
+        taskStore.updateSettings(instanceId, { model: data.model }).catch(err => {
+          console.log('[stream-socket] Failed to persist model:', err);
+        });
+      }
     }
   });
 
@@ -150,12 +162,12 @@ export function setupStreamSocketHandlers(
         }
       }
 
-      const { pendingPermission, pendingUserQuestion } = streamProcess.getPendingState(instanceId);
-      if (pendingPermission) {
-        socket.emit('chat:permission_request', { instanceId, ...pendingPermission });
+      const { pendingPermissions, pendingUserQuestions } = streamProcess.getPendingState(instanceId);
+      for (const pp of pendingPermissions) {
+        socket.emit('chat:permission_request', { instanceId, ...pp });
       }
-      if (pendingUserQuestion) {
-        socket.emit('chat:user_question', { instanceId, ...pendingUserQuestion });
+      for (const pq of pendingUserQuestions) {
+        socket.emit('chat:user_question', { instanceId, ...pq });
       }
     });
 

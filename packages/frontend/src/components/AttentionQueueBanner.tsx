@@ -19,8 +19,8 @@ export default function AttentionQueueBanner({
   return (
     <div className="flex h-9 items-center gap-3 border-b border-border-default bg-hover px-4">
       <div className="flex shrink-0 items-center gap-1.5">
-        <BellRing className="h-3.5 w-3.5 text-amber-400" />
-        <span className="text-xs font-medium text-amber-400">
+        <BellRing className="h-3.5 w-3.5 text-amber-400 light:text-amber-700" />
+        <span className="text-xs font-medium text-amber-400 light:text-amber-700">
           {queue.length} waiting
         </span>
       </div>
@@ -34,7 +34,7 @@ export default function AttentionQueueBanner({
               onClick={() => onJump(item.instanceId)}
               className={`group flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] transition-colors ${
                 isActive
-                  ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40'
+                  ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40 light:bg-amber-100 light:text-amber-800 light:ring-amber-400'
                   : 'bg-elevated text-tertiary hover:bg-hover hover:text-secondary'
               }`}
             >

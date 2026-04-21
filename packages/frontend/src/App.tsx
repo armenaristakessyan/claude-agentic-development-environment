@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import { MessageSquare, GitBranch, PanelLeft, PanelRight, Loader, CheckCircle2, Circle, AlertCircle, Pause, Search, AlertTriangle, Settings } from 'lucide-react';
 import { useHotkeys } from './hooks/useHotkeys';
 import { useSocket } from './hooks/useSocket';
@@ -17,21 +17,75 @@ import { useInstances } from './hooks/useInstances';
 import { useConfig } from './hooks/useConfig';
 import { useAttentionQueue } from './hooks/useAttentionQueue';
 import { useTaskHistory } from './hooks/useTaskHistory';
+import { useTaskWarmup } from './hooks/useTaskWarmup';
 import { useRtk } from './hooks/useRtk';
 import RtkStatusIndicator from './components/RtkStatusIndicator';
 import SettingsModal from './components/SettingsModal';
 import { useTheme } from './contexts/ThemeContext';
 
+// Returns true for PANEL_TRANSITION_MS after `value` changes. Lets us enable
+// CSS width/margin transitions only during open/close toggles while leaving
+// resize-drag (which only mutates width, not the toggle) unanimated.
+// Uses useLayoutEffect so the transition class lands in the same paint frame
+// as the width change — with a plain useEffect the browser commits the new
+// width first, then gets the class one paint later, swallowing the animation.
+const PANEL_TRANSITION_MS = 280;
+function useTransitionFlag(value: unknown): boolean {
+  const [active, setActive] = useState(false);
+  useLayoutEffect(() => {
+    setActive(true);
+    const t = setTimeout(() => setActive(false), PANEL_TRANSITION_MS);
+    return () => clearTimeout(t);
+  }, [value]);
+  return active;
+}
+
 export default function App() {
   const { theme } = useTheme();
   const { config, updateConfig } = useConfig();
   const { projects, loading: projectsLoading, refreshing: projectsRefreshing, refreshProjects, deleteWorktree } = useProjects();
-  const { instances, spawnInstance, killInstance, refetch: refetchInstances } = useInstances();
+  const { instances, loading: instancesLoading, spawnInstance, killInstance, refetch: refetchInstances, patchInstance } = useInstances();
   const { tasks: historyTasks, fetchTasks, removeTask, resumeTask } = useTaskHistory();
   const { status: rtkStatus, stats: rtkStats, loading: rtkLoading, installing: rtkInstalling, installHooks, uninstallHooks, dismissed: rtkDismissed, dismiss: dismissRtk } = useRtk();
-  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
+  const [selectedInstanceId, setSelectedInstanceIdRaw] = useState<string | null>(null);
+  const [restored, setRestored] = useState(false);
+  const setSelectedInstanceId = useCallback((id: string | null | ((prev: string | null) => string | null)) => {
+    setRestored(true);
+    setSelectedInstanceIdRaw(id);
+  }, []);
+
+  // Restore last-selected task from config once the instances fetch has
+  // settled. Using state (not a ref) so useAttentionQueue can be suspended
+  // until restoration runs — otherwise the queue's auto-select steals the
+  // selection before config arrives and the persist effect below writes
+  // the wrong id back.
+  useEffect(() => {
+    if (restored) return;
+    if (!config) return;
+    if (instancesLoading) return;
+    const stored = config.lastSelectedTaskId ?? null;
+    if (stored && instances.some(i => i.id === stored)) {
+      setSelectedInstanceIdRaw(stored);
+    }
+    setRestored(true);
+  }, [config, instances, instancesLoading, restored]);
+
+  useEffect(() => {
+    if (!restored) return;
+    if (config?.lastSelectedTaskId === selectedInstanceId) return;
+    updateConfig({ lastSelectedTaskId: selectedInstanceId }).catch(() => {});
+  }, [restored, selectedInstanceId, config, updateConfig]);
+
+  // If the restored selection points to a task that no longer exists
+  // (deleted between sessions), clear it.
+  useEffect(() => {
+    if (!selectedInstanceId) return;
+    if (instances.length === 0) return;
+    if (!instances.some(i => i.id === selectedInstanceId)) {
+      setSelectedInstanceId(null);
+    }
+  }, [instances, selectedInstanceId]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const typingLocked = !!(selectedInstanceId && (drafts[selectedInstanceId] ?? '').length > 0);
   const [scanPathsOpen, setScanPathsOpen] = useState(false);
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -40,6 +94,13 @@ export default function App() {
 
   // Agent activity tracking — keyed by instanceId → array of active agents
   const [agentTasks, setAgentTasks] = useState<Record<string, AgentTask[]>>({});
+
+  // Warm up a task the first time it's selected, and keep the prefetch
+  // running even if the user switches away (ChatView unmounts per task).
+  const { warm, warmingIds, results: warmupResults } = useTaskWarmup();
+  useEffect(() => {
+    if (selectedInstanceId) warm(selectedInstanceId);
+  }, [selectedInstanceId, warm]);
 
   // Global rate limit state (from any instance)
   const [rateLimitInfo, setRateLimitInfo] = useState<{ status: string; resetsAt?: number; rateLimitType?: string } | null>(null);
@@ -124,12 +185,7 @@ export default function App() {
     };
   }, [socket]);
 
-  const { queue } = useAttentionQueue({
-    instances,
-    selectedInstanceId,
-    onSelectInstance: setSelectedInstanceId,
-    typingLocked,
-  });
+  const { queue } = useAttentionQueue({ instances });
 
   const queuedIds = useMemo(
     () => new Set(queue.map(q => q.instanceId)),
@@ -286,6 +342,19 @@ export default function App() {
   // The panel is open if either tab is open
   const panelInstanceId = changesInstanceId ?? viewerInstanceId;
   const showChanges = !!changesInstanceId;
+
+  // Cache the last non-null panel id so the panel keeps rendering during its
+  // slide-out animation (wrapper width transitions to 0 while content fades).
+  const lastPanelInstanceIdRef = useRef<string | null>(panelInstanceId);
+  if (panelInstanceId) lastPanelInstanceIdRef.current = panelInstanceId;
+  const renderPanelInstanceId = panelInstanceId ?? lastPanelInstanceIdRef.current;
+
+  // Enable CSS width/margin transitions only when an open/close toggle fires.
+  // Otherwise resize-drag would re-trigger a 260ms width animation on every
+  // mousemove, making the drag feel laggy.
+  const leftTransitioning = useTransitionFlag(leftOpen);
+  const changesTransitioning = useTransitionFlag(!!panelInstanceId);
+  const terminalTransitioning = useTransitionFlag(terminalOpen);
 
   const handleLeftResize = useCallback((delta: number) => {
     setLeftWidth(prev => Math.min(400, Math.max(160, prev + delta)));
@@ -480,25 +549,34 @@ export default function App() {
 
       {/* Body — 3-column layout */}
       <div className="flex min-h-0 flex-1 gap-2 px-2 pb-2">
-        {/* Left sidebar — Tasks */}
-        {leftOpen && (
-          <>
-            <TaskSidebar
-              instances={instances}
-              selectedId={selectedInstanceId}
-              queuedIds={queuedIds}
-              historyTasks={historyTasks}
-              agentTasks={agentTasks}
-              onSelect={setSelectedInstanceId}
-              onKill={handleKill}
-              onNewTask={handleNewTask}
-              onResumeTask={handleResumeTask}
-              onRemoveTask={handleRemoveTask}
-              width={leftWidth}
-            />
-            <ResizeHandle side="left" onResize={handleLeftResize} />
-          </>
-        )}
+        {/* Left sidebar — Tasks (width-animated so chat gets pushed) */}
+        <div
+          className="flex shrink-0 items-stretch gap-2 overflow-hidden panel-transition"
+          style={{
+            width: leftOpen ? leftWidth + 8 : 0,
+            marginRight: leftOpen ? 0 : -8,
+          }}
+        >
+          {(leftOpen || leftTransitioning) && (
+            <>
+              <TaskSidebar
+                instances={instances}
+                selectedId={selectedInstanceId}
+                queuedIds={queuedIds}
+                historyTasks={historyTasks}
+                agentTasks={agentTasks}
+                warmingIds={warmingIds}
+                onSelect={setSelectedInstanceId}
+                onKill={handleKill}
+                onNewTask={handleNewTask}
+                onResumeTask={handleResumeTask}
+                onRemoveTask={handleRemoveTask}
+                width={leftWidth}
+              />
+              <ResizeHandle side="left" onResize={handleLeftResize} />
+            </>
+          )}
+        </div>
 
         {/* Main content */}
         <main className="flex flex-1 flex-col overflow-hidden rounded-xl bg-surface">
@@ -513,12 +591,14 @@ export default function App() {
               initialModel={selectedInstance.model}
               initialEffort={selectedInstance.effort}
               initialPermissionMode={selectedInstance.permissionMode}
+              onSettingsChange={(patch) => patchInstance(selectedInstance.id, patch)}
               draft={drafts[selectedInstance.id] ?? ''}
               onDraftChange={handleDraftChange}
               rateLimitInfo={rateLimitInfo}
               codeSelection={codeSelection}
               onClearCodeSelection={handleClearCodeSelection}
               onCodeClick={handleCodeClick}
+              prefetchData={warmupResults[selectedInstance.id]}
             />
           ) : (
             <div className="flex h-full items-center justify-center">
@@ -538,12 +618,18 @@ export default function App() {
           </div>
         </main>
 
-        {/* Task Changes + File Viewer panel */}
-        {panelInstanceId && (
-          <>
-            <ResizeHandle side="right" onResize={handleChangesResize} />
+        {/* Task Changes + File Viewer panel (slides in from the right, pushing chat) */}
+        <div
+          className="flex shrink-0 items-stretch gap-2 overflow-hidden panel-transition"
+          style={{
+            width: panelInstanceId ? changesWidth + 8 : 0,
+            marginLeft: panelInstanceId ? 0 : -8,
+          }}
+        >
+          <ResizeHandle side="right" onResize={handleChangesResize} />
+          {(panelInstanceId || changesTransitioning) && renderPanelInstanceId && (
             <TaskChangesPanel
-              instanceId={panelInstanceId}
+              instanceId={renderPanelInstanceId}
               instances={instances}
               width={changesWidth}
               onClose={handleClosePanel}
@@ -560,20 +646,28 @@ export default function App() {
               onCodeSelect={setCodeSelection}
               onOpenFile={handleOpenFile}
             />
-          </>
-        )}
+          )}
+        </div>
 
-        {/* Terminal panel */}
-        {terminalOpen && (
-          <>
-            <ResizeHandle side="right" onResize={handleTerminalResize} />
+        {/* Terminal panel (slides in from the right, pushing chat).
+            `min-h-0` is required so xterm's inner `flex-1 min-h-0` chain
+            can resolve to a finite height and produce scrollable output. */}
+        <div
+          className="flex min-h-0 shrink-0 items-stretch gap-2 overflow-hidden panel-transition"
+          style={{
+            width: terminalOpen ? terminalWidth + 8 : 0,
+            marginLeft: terminalOpen ? 0 : -8,
+          }}
+        >
+          <ResizeHandle side="right" onResize={handleTerminalResize} />
+          {(terminalOpen || terminalTransitioning) && (
             <TerminalPanel
               width={terminalWidth}
               cwd={selectedInstance?.worktreePath ?? selectedInstance?.projectPath}
               onClose={handleCloseTerminal}
             />
-          </>
-        )}
+          )}
+        </div>
 
         {rightOpen && <ResizeHandle side="right" onResize={handleRightResize} />}
 

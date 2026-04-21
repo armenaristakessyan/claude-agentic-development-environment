@@ -189,7 +189,7 @@ export default function MarketplacePanel() {
                     onClick={() => toggleAutoUpdate(src.name, !src.autoUpdate)}
                     className={`ml-1 shrink-0 rounded p-1 transition-colors ${
                       src.autoUpdate
-                        ? 'text-green-500 hover:text-green-400'
+                        ? 'text-green-500 hover:text-green-400 light:text-green-700 light:hover:text-green-800'
                         : 'text-faint hover:text-muted'
                     }`}
                     title={src.autoUpdate ? 'Auto-update enabled (click to disable)' : 'Auto-update disabled (click to enable)'}
@@ -199,7 +199,7 @@ export default function MarketplacePanel() {
                   <button
                     onClick={() => removeSource(src.name)}
                     disabled={removingSource === src.name}
-                    className="ml-2 shrink-0 rounded p-1 text-faint transition-colors hover:text-red-400 disabled:opacity-40"
+                    className="ml-2 shrink-0 rounded p-1 text-faint transition-colors hover:text-red-400 light:hover:text-red-700 disabled:opacity-40"
                     title={`Remove ${src.name}`}
                   >
                     {removingSource === src.name ? (

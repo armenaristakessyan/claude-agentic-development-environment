@@ -25,6 +25,7 @@ interface StoredTask {
   model: string | null;
   effort: string | null;
   permissionMode: string | null;
+  approvedTools: string[];
 }
 
 export class TaskStore {
@@ -47,6 +48,7 @@ export class TaskStore {
           task.model ??= null;
           task.effort ??= null;
           task.permissionMode ??= null;
+          task.approvedTools ??= [];
         }
         this.saveSync();
       }
@@ -72,6 +74,46 @@ export class TaskStore {
     } catch (err) {
       console.log('[task-store] Failed to save tasks:', err);
     }
+  }
+
+  /**
+   * Rewrite any task.model that isn't a valid SDK alias to the equivalent
+   * alias. Legacy installs persisted the SDK's resolved model names (e.g.
+   * claude-sonnet-4-6[1m]) which don't match the alias ids (sonnet[1m])
+   * that the dropdown operates on. Called once at boot after the model
+   * list is known.
+   */
+  async migrateInvalidModels(validAliases: string[]): Promise<number> {
+    if (validAliases.length === 0) return 0;
+    const valid = new Set(validAliases);
+
+    // Deterministic mapping from known resolved names to the equivalent
+    // alias. Kept explicit — no string heuristics.
+    const RESOLVED_TO_ALIAS: Record<string, string> = {
+      'claude-opus-4-7[1m]': 'default',
+      'claude-opus-4-7': 'default',
+      'claude-opus-4-6[1m]': 'default',
+      'claude-opus-4-6': 'default',
+      'claude-sonnet-4-6[1m]': 'sonnet[1m]',
+      'claude-sonnet-4-6': 'sonnet',
+      'claude-sonnet-4-5[1m]': 'sonnet[1m]',
+      'claude-sonnet-4-5': 'sonnet',
+      'claude-haiku-4-5': 'haiku',
+    };
+    const fallback = valid.has('default') ? 'default' : validAliases[0];
+
+    let changed = 0;
+    for (const task of this.tasks) {
+      if (!task.model || valid.has(task.model)) continue;
+      const mapped = RESOLVED_TO_ALIAS[task.model];
+      task.model = mapped && valid.has(mapped) ? mapped : fallback;
+      changed++;
+    }
+    if (changed > 0) {
+      await this.save();
+      console.log(`[task-store] Migrated ${changed} task(s) with invalid model aliases`);
+    }
+    return changed;
   }
 
   async updateCost(taskId: string, costUsd: number): Promise<void> {
@@ -107,6 +149,13 @@ export class TaskStore {
     if (settings.effort) task.effort = settings.effort;
     if (settings.permissionMode) task.permissionMode = settings.permissionMode;
     if (settings.model) task.model = settings.model;
+    await this.save();
+  }
+
+  async setApprovedTools(taskId: string, approvedTools: string[]): Promise<void> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    task.approvedTools = [...approvedTools];
     await this.save();
   }
 

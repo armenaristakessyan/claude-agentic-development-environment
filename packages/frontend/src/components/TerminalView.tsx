@@ -150,10 +150,8 @@ export default function TerminalView({ instanceId, onTypingChange }: TerminalVie
   }, [instanceId]);
 
   return (
-    <div
-      ref={containerRef}
-      className="h-full w-full"
-      style={{ padding: '8px 10px' }}
-    />
+    <div className="h-full w-full" style={{ padding: '8px 10px' }}>
+      <div ref={containerRef} className="h-full w-full" />
+    </div>
   );
 }

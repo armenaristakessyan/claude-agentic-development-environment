@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, type MutableRefObject } from 'react';
-import { ChevronDown, ChevronRight, ChevronUp, Loader, Copy, Check, BookOpen, Pencil, FilePlus, Terminal, Search, FolderSearch, ListChecks, Globe, Link, Bot, Zap, Plus, Sparkles, CornerDownLeft, FileText, GitBranch as GitBranchIcon, GitCommit, FileDiff, Server, Upload, AlertTriangle as AlertTriangleIcon, Square, type LucideIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, ChevronUp, Loader, Copy, Check, CheckCircle2, BookOpen, Pencil, FilePlus, Terminal, Search, FolderSearch, ListChecks, Globe, Link, Bot, Zap, Plus, Sparkles, CornerDownLeft, FileText, GitBranch as GitBranchIcon, GitCommit, FileDiff, Server, Upload, AlertTriangle as AlertTriangleIcon, Square, type LucideIcon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { useSocket } from '../hooks/useSocket';
 import { useTheme } from '../contexts/ThemeContext';
-import type { ChatMessage, ContentBlock, ContextAttachment, SessionInfo } from '../types';
+import type { ChatMessage, ContentBlock, ContextAttachment, SessionInfo, EffortLevel, ModelOption, TaskWarmupResult } from '../types';
 
 
 function middleTruncate(text: string, maxLen: number): string {
@@ -24,9 +24,9 @@ interface SessionMeta {
 }
 
 interface ContextItem {
-  type: 'file' | 'branch' | 'commit' | 'changes';
+  type: 'file' | 'upload' | 'branch' | 'commit' | 'changes';
   label: string;
-  value: string; // content or identifier
+  value: string; // content, absolute path (for 'upload'), or identifier
 }
 
 interface MentionResult {
@@ -35,30 +35,32 @@ interface MentionResult {
   ext: string;
 }
 
-/** Map file extension to a short language label and color */
+/** Map file extension to a short language label and color.
+ *  Dark mode uses pale text + translucent accent bg; `light:` variants swap to
+ *  darker text + a stronger tinted bg so badges are readable on white. */
 function extInfo(ext: string): { lang: string; color: string } {
   switch (ext) {
-    case 'ts': case 'tsx': return { lang: 'TS', color: 'text-blue-300 bg-blue-400/10' };
-    case 'js': case 'jsx': return { lang: 'JS', color: 'text-yellow-400 bg-yellow-400/10' };
-    case 'py': return { lang: 'PY', color: 'text-emerald-300 bg-green-400/10' };
-    case 'rs': return { lang: 'RS', color: 'text-orange-300/80 bg-orange-400/10' };
-    case 'go': return { lang: 'GO', color: 'text-cyan-300 bg-cyan-400/10' };
-    case 'java': return { lang: 'JV', color: 'text-rose-300 bg-red-400/10' };
-    case 'rb': return { lang: 'RB', color: 'text-rose-300 bg-red-400/10' };
-    case 'php': return { lang: 'PHP', color: 'text-violet-300 bg-purple-400/10' };
-    case 'swift': return { lang: 'SW', color: 'text-orange-300/80 bg-orange-400/10' };
-    case 'kt': return { lang: 'KT', color: 'text-violet-300 bg-purple-400/10' };
-    case 'c': case 'cpp': case 'h': return { lang: 'C', color: 'text-blue-300 bg-blue-300/10' };
-    case 'css': case 'scss': return { lang: 'CSS', color: 'text-pink-300 bg-pink-400/10' };
-    case 'html': return { lang: 'HTML', color: 'text-orange-300/80 bg-orange-400/10' };
-    case 'json': return { lang: 'JSON', color: 'text-yellow-300 bg-yellow-300/10' };
-    case 'md': case 'mdx': return { lang: 'MD', color: 'text-tertiary bg-neutral-400/10' };
-    case 'yaml': case 'yml': return { lang: 'YML', color: 'text-green-300 bg-green-300/10' };
-    case 'toml': return { lang: 'TOML', color: 'text-tertiary bg-neutral-400/10' };
-    case 'sql': return { lang: 'SQL', color: 'text-blue-300 bg-blue-300/10' };
-    case 'sh': case 'bash': case 'zsh': return { lang: 'SH', color: 'text-emerald-300 bg-green-400/10' };
-    case 'scala': return { lang: 'SC', color: 'text-red-300 bg-red-300/10' };
-    default: return { lang: ext.toUpperCase().slice(0, 3) || 'FILE', color: 'text-muted bg-neutral-500/10' };
+    case 'ts': case 'tsx': return { lang: 'TS', color: 'text-blue-300 bg-blue-400/10 light:text-blue-800 light:bg-blue-100' };
+    case 'js': case 'jsx': return { lang: 'JS', color: 'text-yellow-400 bg-yellow-400/10 light:text-yellow-800 light:bg-yellow-100' };
+    case 'py': return { lang: 'PY', color: 'text-emerald-300 bg-green-400/10 light:text-emerald-800 light:bg-emerald-100' };
+    case 'rs': return { lang: 'RS', color: 'text-orange-300/80 bg-orange-400/10 light:text-orange-800 light:bg-orange-100' };
+    case 'go': return { lang: 'GO', color: 'text-cyan-300 bg-cyan-400/10 light:text-cyan-800 light:bg-cyan-100' };
+    case 'java': return { lang: 'JV', color: 'text-rose-300 bg-red-400/10 light:text-rose-800 light:bg-rose-100' };
+    case 'rb': return { lang: 'RB', color: 'text-rose-300 bg-red-400/10 light:text-rose-800 light:bg-rose-100' };
+    case 'php': return { lang: 'PHP', color: 'text-violet-300 bg-purple-400/10 light:text-violet-800 light:bg-violet-100' };
+    case 'swift': return { lang: 'SW', color: 'text-orange-300/80 bg-orange-400/10 light:text-orange-800 light:bg-orange-100' };
+    case 'kt': return { lang: 'KT', color: 'text-violet-300 bg-purple-400/10 light:text-violet-800 light:bg-violet-100' };
+    case 'c': case 'cpp': case 'h': return { lang: 'C', color: 'text-blue-300 bg-blue-300/10 light:text-blue-800 light:bg-blue-100' };
+    case 'css': case 'scss': return { lang: 'CSS', color: 'text-pink-300 bg-pink-400/10 light:text-pink-800 light:bg-pink-100' };
+    case 'html': return { lang: 'HTML', color: 'text-orange-300/80 bg-orange-400/10 light:text-orange-800 light:bg-orange-100' };
+    case 'json': return { lang: 'JSON', color: 'text-yellow-300 bg-yellow-300/10 light:text-yellow-800 light:bg-yellow-100' };
+    case 'md': case 'mdx': return { lang: 'MD', color: 'text-tertiary bg-neutral-400/10 light:text-neutral-700 light:bg-neutral-200' };
+    case 'yaml': case 'yml': return { lang: 'YML', color: 'text-green-300 bg-green-300/10 light:text-green-800 light:bg-green-100' };
+    case 'toml': return { lang: 'TOML', color: 'text-tertiary bg-neutral-400/10 light:text-neutral-700 light:bg-neutral-200' };
+    case 'sql': return { lang: 'SQL', color: 'text-blue-300 bg-blue-300/10 light:text-blue-800 light:bg-blue-100' };
+    case 'sh': case 'bash': case 'zsh': return { lang: 'SH', color: 'text-emerald-300 bg-green-400/10 light:text-emerald-800 light:bg-emerald-100' };
+    case 'scala': return { lang: 'SC', color: 'text-red-300 bg-red-300/10 light:text-red-800 light:bg-red-100' };
+    default: return { lang: ext.toUpperCase().slice(0, 3) || 'FILE', color: 'text-muted bg-neutral-500/10 light:text-neutral-700 light:bg-neutral-200' };
   }
 }
 
@@ -79,14 +81,14 @@ function parseSlashCommand(cmd: string): ParsedSlashCommand {
       raw: cmd,
       display: name,
       badge: team,
-      badgeColor: 'text-violet-300/80 bg-violet-400/10',
+      badgeColor: 'text-violet-300/80 bg-violet-400/10 light:text-violet-800 light:bg-violet-100',
     };
   }
   return {
     raw: cmd,
     display: cmd,
     badge: 'claude',
-    badgeColor: 'text-orange-300/80 bg-orange-400/10',
+    badgeColor: 'text-orange-300/80 bg-orange-400/10 light:text-orange-800 light:bg-orange-100',
   };
 }
 
@@ -96,6 +98,29 @@ export interface CodeSelection {
   endLine: number;
   code: string;
 }
+
+const UPLOAD_ACCEPT = [
+  // Images
+  'image/*',
+  // Documents — read as base64 data URL
+  '.pdf', '.doc', '.docx', '.odt', '.rtf',
+  '.xls', '.xlsx', '.ods',
+  '.ppt', '.pptx', '.odp',
+  '.epub',
+  // Plain text / code — read as text
+  '.txt', '.md', '.markdown', '.mdx', '.rst',
+  '.json', '.json5', '.jsonc', '.yaml', '.yml', '.toml', '.ini', '.env',
+  '.xml', '.html', '.htm', '.css', '.scss', '.sass', '.less',
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.svelte',
+  '.py', '.rs', '.go', '.java', '.kt', '.scala', '.swift', '.rb', '.php',
+  '.c', '.cc', '.cpp', '.cxx', '.h', '.hpp', '.hh', '.m', '.mm',
+  '.cs', '.fs', '.dart', '.lua', '.pl', '.r', '.jl',
+  '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat',
+  '.sql', '.graphql', '.gql', '.proto',
+  '.csv', '.tsv', '.log', '.diff', '.patch',
+  '.dockerfile', '.tf', '.hcl',
+].join(',');
+
 
 interface ChatViewProps {
   instanceId: string;
@@ -110,17 +135,29 @@ interface ChatViewProps {
   codeSelection?: CodeSelection | null;
   onClearCodeSelection?: () => void;
   onCodeClick?: (filePath: string, line?: number) => void;
+  onSettingsChange?: (patch: { model?: string | null; effort?: string | null; permissionMode?: string | null }) => void;
+  prefetchData?: TaskWarmupResult;
 }
 
-/** Map a full model ID (e.g. "claude-sonnet-4-6") back to our short key */
-function modelIdToKey(modelId: string | null | undefined): string {
-  if (!modelId) return 'opus';
-  if (modelId.includes('sonnet')) return 'sonnet';
-  if (modelId.includes('haiku')) return 'haiku';
-  return 'opus';
+const EFFORT_LABELS: Record<EffortLevel, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra High',
+  max: 'Max',
+};
+const ALL_EFFORT_LEVELS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// Deterministic resolver: the SDK's supportedModels() list is the single
+// source of truth for valid model ids. If the stored id isn't in that list,
+// fall back to the first option (normally the "default" alias).
+function resolveStoredModel(storedId: string | null, options: ModelOption[]): string | null {
+  if (options.length === 0) return storedId;
+  if (storedId && options.some(o => o.id === storedId)) return storedId;
+  return options[0]?.id ?? null;
 }
 
-function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, initialPermissionMode, draft, onDraftChange, rateLimitInfo, codeSelection, onClearCodeSelection, onCodeClick }: ChatViewProps) {
+function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, initialPermissionMode, draft, onDraftChange, rateLimitInfo, codeSelection, onClearCodeSelection, onCodeClick, onSettingsChange, prefetchData }: ChatViewProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(true);
   const [streamingBlocks, setStreamingBlocks] = useState<ContentBlock[]>([]);
@@ -130,8 +167,14 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
   const [sending, setSending] = useState(false);
   const [meta, setMeta] = useState<SessionMeta>({ sessionId: null, model: null, totalCostUsd: 0, totalDurationMs: 0, turns: 0 });
 
-  // Input bar settings — initialized from stored task values
-  const [selectedModel, setSelectedModel] = useState(() => modelIdToKey(initialModel));
+  // Model list and slash commands flow in from the parent via useTaskWarmup.
+  // The loader shows until `prefetchData` is provided — first response wins,
+  // even on error (the hook seeds an empty entry so we never hang here).
+  const modelOptions = prefetchData?.modelOptions ?? [];
+  const isReady = !!prefetchData;
+
+  // Input bar settings — initialized from stored task values (full SDK model id)
+  const [selectedModel, setSelectedModel] = useState<string | null>(initialModel ?? null);
   const [permissionMode, setPermissionMode] = useState(initialPermissionMode ?? 'ask');
   const [effortLevel, setEffortLevel] = useState(initialEffort ?? 'medium');
 
@@ -145,8 +188,10 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
   const [permissionQueue, setPermissionQueue] = useState<Array<{ toolName: string; toolInput: unknown; toolUseId: string }>>([]);
   const pendingPermission = permissionQueue[0] ?? null;
 
-  // User question (AskUserQuestion tool)
-  const [pendingQuestion, setPendingQuestion] = useState<{
+  // User question queue (AskUserQuestion tool) — supports multiple concurrent
+  // questions (parallel subagents can each call AskUserQuestion). We render the
+  // head of the queue; answering it pops it so the next one appears.
+  type PendingQuestion = {
     toolUseId: string;
     questions: Array<{
       question: string;
@@ -154,7 +199,9 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
       options?: Array<{ label: string; description?: string }>;
       allowMultiple?: boolean;
     }>;
-  } | null>(null);
+  };
+  const [questionQueue, setQuestionQueue] = useState<PendingQuestion[]>([]);
+  const pendingQuestion = questionQueue[0] ?? null;
 
   // Real-time streaming text from stream_delta events
   const [streamingText, setStreamingText] = useState('');
@@ -180,9 +227,9 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
     stalenessTimerRef.current = setTimeout(() => {
       // Before resetting, verify the backend isn't actually waiting for user input
       fetch(`/api/instances/${instanceId}/pending`)
-        .then(r => r.ok ? r.json() as Promise<{ pendingPermission: unknown; pendingUserQuestion: unknown }> : null)
+        .then(r => r.ok ? r.json() as Promise<{ pendingPermissions: unknown[]; pendingUserQuestions: unknown[] }> : null)
         .then(state => {
-          if (state?.pendingPermission || state?.pendingUserQuestion) {
+          if ((state?.pendingPermissions?.length ?? 0) > 0 || (state?.pendingUserQuestions?.length ?? 0) > 0) {
             // Still waiting for user — don't reset, but re-emit the pending state
             // (the socket join handler should have already done this)
             return;
@@ -219,41 +266,61 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
   // Session info (tools, MCP servers, etc.)
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
 
-  // Fetch slash commands from server cache
-  const refreshSlashCommands = useCallback(() => {
-    fetch('/api/slash-commands')
-      .then(res => res.ok ? res.json() as Promise<string[]> : [])
-      .then(commands => {
-        if (commands.length > 0) {
-          setSessionInfo(prev => ({
-            sessionId: prev?.sessionId ?? null,
-            model: prev?.model ?? null,
-            ...prev,
-            slashCommands: commands,
-          }));
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  // Pre-fetch on mount with retry, + refresh when plugins change
+  // Seed MCP servers, tools, and CLI version from the warmup prefetch so the
+  // header badges ("N tools", "N MCP", "v2.x.x") and the "MCP Servers" context
+  // panel are populated before the first message. The live `chat:session`
+  // event will refresh these once the SDK init arrives for real.
   useEffect(() => {
-    refreshSlashCommands();
-    // Backend may still be prefetching on cold start — retry a few times
-    const retryTimers = [2000, 5000, 10000].map(delay =>
-      setTimeout(() => {
-        if (!sessionInfo?.slashCommands || sessionInfo.slashCommands.length === 0) {
-          refreshSlashCommands();
-        }
-      }, delay),
-    );
-    const onPluginsChanged = () => refreshSlashCommands();
-    window.addEventListener('plugins-changed', onPluginsChanged);
-    return () => {
-      retryTimers.forEach(clearTimeout);
-      window.removeEventListener('plugins-changed', onPluginsChanged);
-    };
-  }, [refreshSlashCommands]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!prefetchData) return;
+    const { mcpServers, tools, cliVersion } = prefetchData;
+    const hasServers = (mcpServers?.length ?? 0) > 0;
+    const hasTools = (tools?.length ?? 0) > 0;
+    const hasVersion = !!cliVersion;
+    if (!hasServers && !hasTools && !hasVersion) return;
+    setSessionInfo(prev => ({
+      sessionId: prev?.sessionId ?? null,
+      model: prev?.model ?? null,
+      tools: prev?.tools ?? (hasTools ? tools : undefined),
+      mcpServers: prev?.mcpServers ?? (hasServers ? mcpServers : undefined),
+      permissionMode: prev?.permissionMode,
+      cliVersion: prev?.cliVersion ?? (hasVersion ? cliVersion! : undefined),
+      slashCommands: prev?.slashCommands,
+    }));
+  }, [prefetchData]);
+
+  // When the warmup hook delivers the model list, normalize any legacy
+  // stored id to an alias the SDK actually recognizes and persist the
+  // correction. Runs once per distinct option set per task.
+  useEffect(() => {
+    if (!prefetchData) return;
+    const opts = prefetchData.modelOptions;
+    if (opts.length === 0) return;
+    setSelectedModel(prev => {
+      const candidate = prev ?? opts[0]?.id ?? null;
+      const resolved = resolveStoredModel(candidate, opts);
+      if (resolved && resolved !== candidate) {
+        fetch(`/api/instances/${instanceId}/settings`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: resolved }),
+        }).catch(err => console.error('[ChatView] normalize model persist failed:', err));
+      }
+      return resolved;
+    });
+  }, [instanceId, prefetchData]);
+
+  // Mirror slash commands into sessionInfo so the `/` autocomplete picks
+  // them up immediately on first open.
+  useEffect(() => {
+    const slash = prefetchData?.slashCommands;
+    if (!slash || slash.length === 0) return;
+    setSessionInfo(prev => ({
+      sessionId: prev?.sessionId ?? null,
+      model: prev?.model ?? null,
+      ...prev,
+      slashCommands: slash,
+    }));
+  }, [prefetchData]);
 
   // Context attachments
   const [contextItems, setContextItems] = useState<ContextItem[]>([]);
@@ -416,7 +483,10 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
       questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; allowMultiple?: boolean }>;
     }) => {
       if (id !== instanceId) return;
-      setPendingQuestion({ toolUseId, questions });
+      setQuestionQueue(prev => {
+        if (prev.some(q => q.toolUseId === toolUseId)) return prev;
+        return [...prev, { toolUseId, questions }];
+      });
       clearStalenessTimer(); // Waiting on user — don't timeout
     };
 
@@ -502,23 +572,30 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
       // handles this, but the REST fallback ensures robustness)
       fetch(`/api/instances/${instanceId}/pending`)
         .then(r => r.ok ? r.json() as Promise<{
-          pendingPermission: { toolName: string; toolInput: unknown; toolUseId: string } | null;
-          pendingUserQuestion: { toolUseId: string; questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; allowMultiple?: boolean }> } | null;
+          pendingPermissions: Array<{ toolName: string; toolInput: unknown; toolUseId: string }>;
+          pendingUserQuestions: Array<PendingQuestion>;
         }> : null)
         .then(state => {
           if (!state) return;
-          if (state.pendingPermission) {
+          if (state.pendingPermissions.length > 0) {
             setPermissionQueue(prev => {
-              // Avoid duplicates
-              if (prev.some(p => p.toolUseId === state.pendingPermission!.toolUseId)) return prev;
-              return [...prev, state.pendingPermission!];
+              const seen = new Set(prev.map(p => p.toolUseId));
+              const next = [...prev];
+              for (const p of state.pendingPermissions) {
+                if (!seen.has(p.toolUseId)) next.push(p);
+              }
+              return next;
             });
             setSending(true);
           }
-          if (state.pendingUserQuestion) {
-            setPendingQuestion(prev => {
-              if (prev?.toolUseId === state.pendingUserQuestion!.toolUseId) return prev;
-              return state.pendingUserQuestion;
+          if (state.pendingUserQuestions.length > 0) {
+            setQuestionQueue(prev => {
+              const seen = new Set(prev.map(q => q.toolUseId));
+              const next = [...prev];
+              for (const q of state.pendingUserQuestions) {
+                if (!seen.has(q.toolUseId)) next.push(q);
+              }
+              return next;
             });
             setSending(true);
           }
@@ -554,22 +631,30 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
     // socket re-emit was still missed (e.g. event loop delay).
     fetch(`/api/instances/${instanceId}/pending`)
       .then(r => r.ok ? r.json() as Promise<{
-        pendingPermission: { toolName: string; toolInput: unknown; toolUseId: string } | null;
-        pendingUserQuestion: { toolUseId: string; questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; allowMultiple?: boolean }> } | null;
+        pendingPermissions: Array<{ toolName: string; toolInput: unknown; toolUseId: string }>;
+        pendingUserQuestions: Array<PendingQuestion>;
       }> : null)
       .then(state => {
         if (!state) return;
-        if (state.pendingPermission) {
+        if (state.pendingPermissions.length > 0) {
           setPermissionQueue(prev => {
-            if (prev.some(p => p.toolUseId === state.pendingPermission!.toolUseId)) return prev;
-            return [...prev, state.pendingPermission!];
+            const seen = new Set(prev.map(p => p.toolUseId));
+            const next = [...prev];
+            for (const p of state.pendingPermissions) {
+              if (!seen.has(p.toolUseId)) next.push(p);
+            }
+            return next;
           });
           setSending(true);
         }
-        if (state.pendingUserQuestion) {
-          setPendingQuestion(prev => {
-            if (prev?.toolUseId === state.pendingUserQuestion!.toolUseId) return prev;
-            return state.pendingUserQuestion;
+        if (state.pendingUserQuestions.length > 0) {
+          setQuestionQueue(prev => {
+            const seen = new Set(prev.map(q => q.toolUseId));
+            const next = [...prev];
+            for (const q of state.pendingUserQuestions) {
+              if (!seen.has(q.toolUseId)) next.push(q);
+            }
+            return next;
           });
           setSending(true);
         }
@@ -603,6 +688,52 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
       }
     };
   }, [instanceId, socket, resetStreamingState, resetStalenessTimer, clearStalenessTimer]);
+
+  // Safety-net poll for pending permissions / user questions.
+  // The socket is the primary delivery channel, but connection resets or
+  // missed events can leave the UI without a prompt while the backend is
+  // blocked on canUseTool. A low-frequency poll guarantees the approval UI
+  // eventually shows even if the socket event was lost.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/instances/${instanceId}/pending`);
+        if (!res.ok || cancelled) return;
+        const state = await res.json() as {
+          pendingPermissions: Array<{ toolName: string; toolInput: unknown; toolUseId: string }>;
+          pendingUserQuestions: Array<PendingQuestion>;
+        };
+        if (cancelled) return;
+        if (state.pendingPermissions.length > 0) {
+          setPermissionQueue(prev => {
+            const seen = new Set(prev.map(p => p.toolUseId));
+            const next = [...prev];
+            for (const p of state.pendingPermissions) {
+              if (!seen.has(p.toolUseId)) next.push(p);
+            }
+            return next;
+          });
+          setSending(true);
+        }
+        if (state.pendingUserQuestions.length > 0) {
+          setQuestionQueue(prev => {
+            const seen = new Set(prev.map(q => q.toolUseId));
+            const next = [...prev];
+            for (const q of state.pendingUserQuestions) {
+              if (!seen.has(q.toolUseId)) next.push(q);
+            }
+            return next;
+          });
+          setSending(true);
+        }
+      } catch {
+        // Network errors are expected occasionally — next tick will retry.
+      }
+    };
+    const interval = setInterval(tick, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [instanceId]);
 
   // Scroll-position-based auto-scroll — more robust than IntersectionObserver
   // which can get "unlocked" during layout shifts (streaming → final transition).
@@ -640,12 +771,44 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
   // Add a system message locally
 
 
-  // Model ID mapping
-  const modelIdMap: Record<string, string> = {
-    sonnet: 'claude-sonnet-4-6',
-    opus: 'claude-opus-4-6',
-    haiku: 'claude-haiku-4-5-20251001',
-  };
+  // Models are populated via the per-task prefetch above. No separate fetch.
+
+  const currentModelOption = useMemo(
+    () => modelOptions.find(m => m.id === selectedModel),
+    [modelOptions, selectedModel],
+  );
+
+  const availableEffortLevels = useMemo<EffortLevel[]>(() => {
+    if (currentModelOption?.supportedEffortLevels && currentModelOption.supportedEffortLevels.length > 0) {
+      return currentModelOption.supportedEffortLevels;
+    }
+    return ALL_EFFORT_LEVELS;
+  }, [currentModelOption]);
+
+  // If the selected effort isn't supported by the current model, snap to the closest supported level
+  useEffect(() => {
+    if (!availableEffortLevels.includes(effortLevel as EffortLevel)) {
+      const fallback = availableEffortLevels.includes('medium' as EffortLevel)
+        ? 'medium'
+        : availableEffortLevels[0];
+      if (fallback) {
+        setEffortLevel(fallback);
+        persistSettings({ effort: fallback });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableEffortLevels]);
+
+  // Persist settings on change (model / effort / permissionMode). Backend applies
+  // to the live conversation AND writes to tasks.json so they survive restart.
+  const persistSettings = useCallback((patch: { model?: string; effort?: string; permissionMode?: string }) => {
+    onSettingsChange?.(patch);
+    fetch(`/api/instances/${instanceId}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }).catch(err => console.error('[ChatView] persist settings failed:', err));
+  }, [instanceId, onSettingsChange]);
 
   // Track tools already approved this session to prevent duplicate prompts
   const approvedToolsRef = useRef(new Set<string>());
@@ -672,14 +835,19 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
       // approve_tool also resolves the pending permission if it matches
       socket.emit('chat:approve_tool', { instanceId, toolName });
     } else {
-      // Session-only: resolve this specific tool call via socket
-      if (permission) {
-        socket.emit('chat:resolve_permission', {
-          instanceId,
-          toolUseId: permission.toolUseId,
-          allow: true,
+      // Session scope: add to the task's persistent allowlist so the
+      // approval survives restart. /allow-tool adds to approvedTools,
+      // persists via taskStore, and resolves the pending callback if the
+      // tool names match. REST over socket for dropped-socket resilience.
+      try {
+        const res = await fetch(`/api/instances/${instanceId}/allow-tool`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ toolName, scope: 'session' }),
         });
-      } else {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        console.error('[ChatView] allow-tool REST failed, falling back to socket:', err);
         socket.emit('chat:approve_tool', { instanceId, toolName });
       }
     }
@@ -721,7 +889,7 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: text,
-          model: modelIdMap[selectedModel],
+          model: selectedModel ?? undefined,
           permissionMode,
           effort: effortLevel,
           context: buildContextPayload(),
@@ -745,27 +913,44 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
     } catch { /* ignore */ }
   }, [instanceId]);
 
-  // Handle file upload from the hidden input
+  // Handle file upload from the hidden input. Files are POSTed to the
+  // backend, which writes them under ~/.claude-dashboard/uploads/<id>/
+  // and returns an absolute path. We attach the *path* to the context
+  // so Claude reads the file on demand instead of receiving its bytes
+  // inlined in the prompt.
   const handleUploadFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    const readAsDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+
     for (const file of Array.from(files)) {
-      if (file.type.startsWith('image/')) {
-        const dataUrl = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.readAsDataURL(file);
+      try {
+        const dataUrl = await readAsDataUrl(file);
+        const res = await fetch(`/api/instances/${instanceId}/upload`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: file.name, dataUrl }),
         });
-        setContextItems(prev => [...prev, { type: 'file', label: file.name, value: `[Image: ${file.name}]\n${dataUrl}` }]);
-      } else {
-        const text = await file.text();
-        setContextItems(prev => [...prev, { type: 'file', label: file.name, value: text }]);
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+          console.error('[ChatView] upload failed:', err);
+          continue;
+        }
+        const { path } = await res.json() as { path: string; filename: string };
+        setContextItems(prev => [...prev, { type: 'upload', label: file.name, value: path }]);
+      } catch (err) {
+        console.error('[ChatView] upload error:', err);
       }
     }
     // Reset so the same file can be re-selected
     e.target.value = '';
-  }, []);
+  }, [instanceId]);
 
   // @ mention state for codebase search (files + symbols)
   const [mentionQuery, setMentionQuery] = useState('');
@@ -802,18 +987,25 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
     return () => { if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current); };
   }, [mentionQuery, mentionActive, instanceId]);
 
-  // Submit answer to a user question — resolve via socket (zero extra tokens)
+  // Submit answer to the front-of-queue user question. Pop it so the next
+  // queued question (if any) renders next.
   const submitQuestionAnswer = useCallback((answers: string[]) => {
     const answerText = answers.join(', ');
     const question = pendingQuestion;
-    setPendingQuestion(null);
-    if (question) {
+    if (!question) return;
+    setQuestionQueue(prev => prev.filter(q => q.toolUseId !== question.toolUseId));
+    fetch(`/api/instances/${instanceId}/resolve-question`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ toolUseId: question.toolUseId, answer: answerText }),
+    }).catch(err => {
+      console.error('[ChatView] resolve-question REST failed, falling back to socket:', err);
       socket.emit('chat:resolve_question', {
         instanceId,
         toolUseId: question.toolUseId,
         answer: answerText,
       });
-    }
+    });
   }, [socket, instanceId, pendingQuestion]);
 
   // Expose sendMessage to parent via ref
@@ -876,7 +1068,7 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          model: modelIdMap[selectedModel],
+          model: selectedModel ?? undefined,
           permissionMode,
           effort: effortLevel,
           context: buildContextPayload(),
@@ -962,6 +1154,17 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
     }
   }, [setInput]);
 
+  if (!isReady) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-faint">
+          <Loader className="h-6 w-6 animate-spin" />
+          <span className="text-[12px]">Waking Claude…</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* Session info bar */}
@@ -1032,7 +1235,7 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
 
           {/* Interrupted indicator */}
           {wasInterrupted && !isProcessing && (
-            <div className="flex items-center gap-2 text-[12px] text-amber-400/70">
+            <div className="flex items-center gap-2 text-[12px] text-amber-400/70 light:text-amber-700">
               <Square className="h-3 w-3" />
               <span>Interrupted</span>
             </div>
@@ -1040,13 +1243,13 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
 
           {/* Error with retry button */}
           {lastError && !isProcessing && (
-            <div className="flex items-center gap-3 rounded-lg border border-rose-500/20 bg-rose-950/10 px-3 py-2">
-              <AlertTriangleIcon className="h-3.5 w-3.5 shrink-0 text-rose-400" />
-              <span className="flex-1 truncate text-[12px] text-rose-300/80">{lastError}</span>
+            <div className="flex items-center gap-3 rounded-lg border border-rose-500/20 bg-rose-950/10 px-3 py-2 light:border-rose-300 light:bg-rose-50">
+              <AlertTriangleIcon className="h-3.5 w-3.5 shrink-0 text-rose-400 light:text-rose-700" />
+              <span className="flex-1 truncate text-[12px] text-rose-300/80 light:text-rose-800">{lastError}</span>
               {lastPromptRef.current && (
                 <button
                   onClick={() => { setLastError(null); sendDirect(lastPromptRef.current!, true); }}
-                  className="shrink-0 rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 transition-colors hover:bg-rose-500/25"
+                  className="shrink-0 rounded-md bg-rose-500/15 px-2.5 py-1 text-[11px] font-medium text-rose-300 transition-colors hover:bg-rose-500/25 light:bg-rose-200 light:text-rose-800 light:hover:bg-rose-300"
                 >
                   Retry
                 </button>
@@ -1063,14 +1266,22 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
         <div className="shrink-0 px-6 py-3">
           <div className="mx-auto max-w-3xl">
             <UserQuestionForm
+              key={pendingQuestion.toolUseId}
               questions={pendingQuestion.questions}
+              queueSize={questionQueue.length}
               onSubmit={submitQuestionAnswer}
               onSkip={() => {
                 const q = pendingQuestion;
-                setPendingQuestion(null);
-                if (q) {
+                if (!q) return;
+                setQuestionQueue(prev => prev.filter(item => item.toolUseId !== q.toolUseId));
+                fetch(`/api/instances/${instanceId}/resolve-question`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ toolUseId: q.toolUseId, answer: 'skip' }),
+                }).catch(err => {
+                  console.error('[ChatView] resolve-question REST failed, falling back to socket:', err);
                   socket.emit('chat:resolve_question', { instanceId, toolUseId: q.toolUseId, answer: 'skip' });
-                }
+                });
               }}
             />
           </div>
@@ -1088,11 +1299,18 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
             const permission = permissionQueue[0];
             setPermissionQueue(prev => prev.slice(1));
             if (permission) {
-              socket.emit('chat:resolve_permission', {
-                instanceId,
-                toolUseId: permission.toolUseId,
-                allow: false,
-                message,
+              fetch(`/api/instances/${instanceId}/resolve-permission`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ toolUseId: permission.toolUseId, allow: false, message }),
+              }).catch(err => {
+                console.error('[ChatView] resolve-permission REST failed, falling back to socket:', err);
+                socket.emit('chat:resolve_permission', {
+                  instanceId,
+                  toolUseId: permission.toolUseId,
+                  allow: false,
+                  message,
+                });
               });
             }
           }}
@@ -1149,7 +1367,7 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
             ref={uploadInputRef}
             type="file"
             multiple
-            accept="image/*,.txt,.md,.json,.ts,.tsx,.js,.jsx,.py,.rs,.go,.java,.c,.cpp,.h,.css,.html,.xml,.yaml,.yml,.toml,.csv,.log,.sh,.bash,.zsh,.sql,.rb,.php,.swift,.kt,.scala"
+            accept={UPLOAD_ACCEPT}
             className="hidden"
             onChange={handleUploadFiles}
           />
@@ -1181,6 +1399,7 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
                   className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-input bg-hover px-2 py-1 text-[12px] text-tertiary"
                 >
                   {item.type === 'file' && <FileText className="h-3 w-3 text-faint" />}
+                  {item.type === 'upload' && <Upload className="h-3 w-3 text-faint" />}
                   {item.type === 'branch' && <GitBranchIcon className="h-3 w-3 text-faint" />}
                   {item.type === 'commit' && <GitCommit className="h-3 w-3 text-faint" />}
                   {item.type === 'changes' && <FileDiff className="h-3 w-3 text-faint" />}
@@ -1194,13 +1413,13 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
                 </span>
               ))}
               {codeSelection && (
-                <span className="flex shrink-0 items-center gap-1.5 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[12px] text-violet-300" title={`${codeSelection.filePath}:${codeSelection.startLine}-${codeSelection.endLine}`}>
+                <span className="flex shrink-0 items-center gap-1.5 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-1 text-[12px] text-violet-300 light:border-violet-300 light:bg-violet-100 light:text-violet-800" title={`${codeSelection.filePath}:${codeSelection.startLine}-${codeSelection.endLine}`}>
                   <FileText className="h-3 w-3" />
                   <span>{middleTruncate(codeSelection.filePath, 25)}:{codeSelection.startLine}-{codeSelection.endLine}</span>
-                  <span className="text-[10px] text-violet-300/60">{codeSelection.endLine - codeSelection.startLine + 1} lines</span>
+                  <span className="text-[10px] text-violet-300/60 light:text-violet-700/70">{codeSelection.endLine - codeSelection.startLine + 1} lines</span>
                   <button
                     onClick={onClearCodeSelection}
-                    className="ml-0.5 text-violet-300/50 hover:text-violet-200"
+                    className="ml-0.5 text-violet-300/50 hover:text-violet-200 light:text-violet-700/60 light:hover:text-violet-900"
                   >
                     &times;
                   </button>
@@ -1249,13 +1468,13 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
           {contextUsage && contextUsage.maxTokens > 0 && contextUsage.usedTokens / contextUsage.maxTokens > 0.8 && (
             <div className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 mt-2 text-[11px] ${
               contextUsage.usedTokens / contextUsage.maxTokens > 0.95
-                ? 'bg-rose-950/30 text-rose-300/80'
-                : 'bg-amber-950/30 text-amber-300/70'
+                ? 'bg-rose-950/30 text-rose-300/80 light:bg-rose-100 light:text-rose-800'
+                : 'bg-amber-950/30 text-amber-300/70 light:bg-amber-100 light:text-amber-800'
             }`}>
               <AlertTriangleIcon className="h-3 w-3 shrink-0" />
               <span>Context {Math.round((contextUsage.usedTokens / contextUsage.maxTokens) * 100)}% full</span>
               {contextUsage.usedTokens / contextUsage.maxTokens > 0.95 && (
-                <span className="text-rose-400/50">— consider starting a new task or using /compact</span>
+                <span className="text-rose-400/50 light:text-rose-700/80">— consider starting a new task or using /compact</span>
               )}
             </div>
           )}
@@ -1305,20 +1524,19 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
                 className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] text-muted transition-colors hover:bg-hover hover:text-secondary"
               >
                 <Sparkles className="h-3 w-3" />
-                <span>{MODEL_OPTIONS.find(m => m.id === selectedModel)?.label ?? 'Sonnet 4.6'}</span>
+                <span>{modelOptions.find(m => m.id === selectedModel)?.label ?? 'Model'}</span>
                 <ChevronUp className="h-3 w-3" />
               </button>
-              {modelOpen && (
-                <DropdownMenu
-                  items={MODEL_OPTIONS.map(m => ({
-                    id: m.id,
-                    label: m.label,
-                    sublabel: m.id === 'opus' ? 'Default' : undefined,
-                    active: m.id === selectedModel,
-                  }))}
-                  onSelect={(id) => { setSelectedModel(id); setModelOpen(false); }}
+              {modelOpen && modelOptions.length > 0 && (
+                <ModelDropdown
+                  options={modelOptions}
+                  selectedId={selectedModel}
+                  onSelect={(id) => {
+                    setSelectedModel(id);
+                    setModelOpen(false);
+                    persistSettings({ model: id });
+                  }}
                   onClose={() => setModelOpen(false)}
-                  title="Model"
                 />
               )}
             </div>
@@ -1335,43 +1553,61 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
               {permissionOpen && (
                 <PermissionDropdown
                   selectedId={permissionMode}
-                  onSelect={(id) => { setPermissionMode(id); setPermissionOpen(false); }}
+                  onSelect={(id) => {
+                    setPermissionMode(id);
+                    setPermissionOpen(false);
+                    persistSettings({ permissionMode: id });
+                  }}
                   onClose={() => setPermissionOpen(false)}
                 />
               )}
             </div>
 
-            {/* Effort selector */}
-            <div className="relative">
-              <button
-                onClick={() => { setEffortOpen(prev => !prev); setModelOpen(false); setPermissionOpen(false); setContextMenuOpen(false); }}
-                className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-colors hover:bg-hover ${
-                  effortLevel === 'high' ? 'text-violet-300/70 hover:text-violet-300'
-                    : effortLevel === 'medium' ? 'text-blue-300/70 hover:text-blue-300'
-                    : 'text-tertiary/70 hover:text-secondary'
-                }`}
-              >
-                <BrainIcon className="h-4 w-4" />
-              </button>
-              {effortOpen && (
-                <DropdownMenu
-                  items={EFFORT_OPTIONS.map(e => ({
-                    id: e.id,
-                    label: e.label,
-                    sublabel: e.id === 'medium' ? 'Default' : undefined,
-                    active: e.id === effortLevel,
-                    icon: <BrainIcon className={`h-3.5 w-3.5 ${
-                      e.id === 'high' ? 'text-violet-300'
-                        : e.id === 'medium' ? 'text-blue-300'
-                        : 'text-tertiary'
-                    }`} />,
-                  }))}
-                  onSelect={(id) => { setEffortLevel(id); setEffortOpen(false); }}
-                  onClose={() => setEffortOpen(false)}
-                  title="Effort"
-                />
-              )}
-            </div>
+            {/* Effort selector — shown only for models that support effort */}
+            {currentModelOption?.supportsEffort !== false && availableEffortLevels.length > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => { setEffortOpen(prev => !prev); setModelOpen(false); setPermissionOpen(false); setContextMenuOpen(false); }}
+                  className={`flex items-center gap-1 rounded-lg px-2 py-1 transition-colors hover:bg-hover ${
+                    effortLevel === 'max' ? ''
+                      : effortLevel === 'xhigh' ? ''
+                      : effortLevel === 'high' ? 'text-violet-300/70 hover:text-violet-300 light:text-violet-700 light:hover:text-violet-800'
+                      : effortLevel === 'medium' ? 'text-blue-300/70 hover:text-blue-300 light:text-blue-700 light:hover:text-blue-800'
+                      : 'text-tertiary/70 hover:text-secondary'
+                  }`}
+                >
+                  <BrainIcon className={`h-4 w-4 ${
+                    effortLevel === 'max' ? 'effort-max'
+                      : effortLevel === 'xhigh' ? 'effort-xhigh'
+                      : ''
+                  }`} />
+                </button>
+                {effortOpen && (
+                  <DropdownMenu
+                    items={[...availableEffortLevels].reverse().map(e => ({
+                      id: e,
+                      label: EFFORT_LABELS[e],
+                      sublabel: e === 'medium' ? 'Default' : undefined,
+                      active: e === effortLevel,
+                      icon: <BrainIcon className={`h-3.5 w-3.5 ${
+                        e === 'max' ? 'effort-max'
+                          : e === 'xhigh' ? 'effort-xhigh'
+                          : e === 'high' ? 'text-violet-300 light:text-violet-700'
+                          : e === 'medium' ? 'text-blue-300 light:text-blue-700'
+                          : 'text-tertiary'
+                      }`} />,
+                    }))}
+                    onSelect={(id) => {
+                      setEffortLevel(id);
+                      setEffortOpen(false);
+                      persistSettings({ effort: id });
+                    }}
+                    onClose={() => setEffortOpen(false)}
+                    title="Effort"
+                  />
+                )}
+              </div>
+            )}
 
             {/* Spacer */}
             <div className="flex-1" />
@@ -1380,7 +1616,7 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
             {isProcessing ? (
               <button
                 onClick={handleInterrupt}
-                className="flex items-center gap-1.5 rounded-lg bg-rose-500/15 px-3 py-1 text-[12px] text-rose-300 transition-colors hover:bg-rose-500/20"
+                className="flex items-center gap-1.5 rounded-lg bg-rose-500/15 px-3 py-1 text-[12px] text-rose-300 transition-colors hover:bg-rose-500/20 light:bg-rose-100 light:text-rose-800 light:hover:bg-rose-200"
               >
                 <Square className="h-3 w-3" />
                 <span>Stop</span>
@@ -1521,20 +1757,20 @@ function LiveThinkingBlock({ thinking, done }: { thinking: string; done: boolean
         className="flex items-center gap-2 text-[13px] text-neutral-500 transition-colors hover:text-neutral-400"
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <BrainIcon className="h-3.5 w-3.5 text-violet-400" />
-        <span className="text-violet-400/80">
+        <BrainIcon className="h-3.5 w-3.5 text-violet-400 light:text-violet-700" />
+        <span className="text-violet-400/80 light:text-violet-700">
           {done ? 'Thought process' : 'Thinking...'}
         </span>
         {!done && (
-          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+          <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400 light:bg-violet-700" />
         )}
         {done && (
-          <Check className="h-3 w-3 text-violet-400/50" />
+          <Check className="h-3 w-3 text-violet-400/50 light:text-violet-700" />
         )}
       </button>
       {expanded && (
-        <div className="ml-5 mt-1.5 max-h-48 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 px-3 py-2">
-          <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-500">{thinking}</p>
+        <div className="ml-5 mt-1.5 max-h-48 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 light:border-violet-300 light:bg-violet-50 px-3 py-2">
+          <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-neutral-500 light:text-violet-900">{thinking}</p>
         </div>
       )}
     </div>
@@ -1558,18 +1794,18 @@ function LiveToolGroup({ tools, isLive }: { tools: ToolEntry[]; isLive: boolean 
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         {isLive && lastToolInfo && LastIcon ? (
-          <LastIcon className="h-4 w-4 animate-pulse text-blue-300" />
+          <LastIcon className="h-4 w-4 animate-pulse text-blue-300 light:text-blue-700" />
         ) : isLive ? (
-          <Loader className="h-4 w-4 animate-spin text-blue-300" />
+          <Loader className="h-4 w-4 animate-spin text-blue-300 light:text-blue-700" />
         ) : hasErrors ? (
-          <AlertTriangleIcon className="h-3 w-3 text-amber-300/70" />
+          <AlertTriangleIcon className="h-3 w-3 text-amber-300/70 light:text-amber-700" />
         ) : (
-          <Check className="h-3 w-3 text-emerald-300" />
+          <Check className="h-3 w-3 text-emerald-300 light:text-emerald-700" />
         )}
         <span>
           {isLive
             ? lastToolInfo
-              ? <><span className="text-blue-300/80">{lastToolInfo.label}</span>{toolCount > 1 && <span className="ml-1 text-neutral-600">+{toolCount - 1}</span>}</>
+              ? <><span className="text-blue-300/80 light:text-blue-700">{lastToolInfo.label}</span>{toolCount > 1 && <span className="ml-1 text-neutral-600">+{toolCount - 1}</span>}</>
               : 'Processing...'
             : `Processed (${toolCount} ${toolCount === 1 ? 'action' : 'actions'})`
           }
@@ -1640,12 +1876,13 @@ const MessageBubble = React.memo(function MessageBubble({ message, onCodeClick }
     const attachments = message.contextAttachments;
     return (
       <div className="flex justify-end overflow-hidden">
-        <div className="min-w-0 max-w-[80%] space-y-1.5 rounded-2xl rounded-br-sm bg-input px-4 py-2.5">
+        <div className="min-w-0 max-w-[80%] space-y-1.5 rounded-2xl rounded-br-sm bg-input light:bg-blue-50 light:border light:border-blue-200 px-4 py-2.5">
           {attachments && attachments.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {attachments.map((att, i) => (
                 <span key={i} className="inline-flex items-center gap-1 rounded border border-border-input bg-badge px-1.5 py-0.5 text-[11px] text-tertiary" title={att.label}>
                   {att.type === 'file' && <FileText className="h-2.5 w-2.5" />}
+                  {att.type === 'upload' && <Upload className="h-2.5 w-2.5" />}
                   {att.type === 'branch' && <GitBranchIcon className="h-2.5 w-2.5" />}
                   {att.type === 'commit' && <GitCommit className="h-2.5 w-2.5" />}
                   {att.type === 'changes' && <FileDiff className="h-2.5 w-2.5" />}
@@ -1743,13 +1980,13 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
         className="flex items-center gap-2 text-[13px] text-muted transition-colors hover:text-tertiary"
       >
         {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <BrainIcon className="h-3.5 w-3.5 text-violet-400/60" />
-        <span className="text-violet-400/50">Thought process</span>
+        <BrainIcon className="h-3.5 w-3.5 text-violet-400/60 light:text-violet-700" />
+        <span className="text-violet-400/50 light:text-violet-700">Thought process</span>
         {!expanded && <span className="max-w-[300px] truncate text-[11px] text-faint">{preview}...</span>}
       </button>
       {expanded && (
-        <div className="ml-5 mt-1.5 max-h-64 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 px-3 py-2">
-          <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted">{thinking}</p>
+        <div className="ml-5 mt-1.5 max-h-64 overflow-y-auto rounded border border-violet-500/10 bg-violet-950/5 light:border-violet-300 light:bg-violet-50 px-3 py-2">
+          <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-muted light:text-violet-900">{thinking}</p>
         </div>
       )}
     </div>
@@ -2030,15 +2267,15 @@ function PermissionPrompt({
 
   return (
     <div className="shrink-0 px-6 py-3">
-      <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-blue-500/30 bg-popover">
+      <div className="mx-auto max-w-3xl overflow-hidden rounded-xl border border-blue-500/30 light:border-blue-600/40 bg-popover">
         {/* Header */}
         <div className="px-5 pt-4 pb-2">
           <div className="flex items-center gap-2">
-            <p className={`text-[13px] font-semibold ${isFileOp ? 'text-emerald-300' : isBash ? 'text-amber-300' : 'text-blue-300'}`}>
+            <p className={`text-[13px] font-semibold ${isFileOp ? 'text-emerald-300 light:text-emerald-700' : isBash ? 'text-amber-300 light:text-amber-700' : 'text-blue-300 light:text-blue-700'}`}>
               {toolLabel}
             </p>
             {queueSize > 1 && (
-              <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-300">
+              <span className="rounded-full bg-blue-500/20 px-1.5 py-0.5 text-[10px] font-medium text-blue-300 light:bg-blue-100 light:text-blue-800">
                 +{queueSize - 1} more
               </span>
             )}
@@ -2404,23 +2641,11 @@ function shortenPath(fp: string): string {
 
 // --- Options constants ---
 
-const MODEL_OPTIONS = [
-  { id: 'opus', label: 'Opus 4.6' },
-  { id: 'sonnet', label: 'Sonnet 4.6' },
-  { id: 'haiku', label: 'Haiku 4.5' },
-] as const;
-
 const PERMISSION_OPTIONS = [
   { id: 'plan', label: 'Plan', description: 'Create plan before making changes', badgeBg: 'bg-amber-900/40', badgeText: 'text-amber-300/90', lightBadgeBg: 'bg-amber-100', lightBadgeText: 'text-amber-800' },
   { id: 'ask', label: 'Ask Permission', description: 'Prompt for permission on the first use of each tool', badgeBg: 'bg-sky-900/40', badgeText: 'text-sky-300/90', lightBadgeBg: 'bg-sky-100', lightBadgeText: 'text-sky-800' },
   { id: 'auto-edit', label: 'Auto-Edit', description: 'Auto-accept file edit permissions', badgeBg: 'bg-orange-900/40', badgeText: 'text-orange-300/80/90', lightBadgeBg: 'bg-orange-100', lightBadgeText: 'text-orange-800' },
   { id: 'full-access', label: 'Full Access', description: 'Skip all permission prompts', badgeBg: 'bg-rose-900/40', badgeText: 'text-rose-300/90', lightBadgeBg: 'bg-rose-100', lightBadgeText: 'text-rose-800' },
-] as const;
-
-const EFFORT_OPTIONS = [
-  { id: 'high', label: 'High' },
-  { id: 'medium', label: 'Medium' },
-  { id: 'low', label: 'Low' },
 ] as const;
 
 function BrainIcon({ className }: { className?: string }) {
@@ -2513,6 +2738,67 @@ function DropdownMenu({
   );
 }
 
+// --- Model dropdown — wide, two-line layout with active indicator ---
+
+function ModelDropdown({
+  options,
+  selectedId,
+  onSelect,
+  onClose,
+}: {
+  options: ModelOption[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="absolute bottom-full left-0 z-30 mb-1 w-[340px] max-h-[420px] overflow-y-auto rounded-lg border border-border-input bg-popover shadow-xl"
+    >
+      <div className="sticky top-0 bg-popover px-3 py-2 text-[11px] font-medium text-faint">Model</div>
+      <div className="pb-1">
+        {options.map(opt => {
+          const active = opt.id === selectedId;
+          return (
+            <button
+              key={opt.id}
+              onClick={() => onSelect(opt.id)}
+              className={`flex w-full items-start gap-2 px-3 py-2 text-left transition-colors ${
+                active ? 'bg-blue-500/15' : 'hover:bg-hover'
+              }`}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[13px] font-medium text-secondary">{opt.label}</span>
+                  {active && <CheckCircle2 className="h-3.5 w-3.5 text-blue-400 shrink-0" />}
+                </div>
+                {opt.description && (
+                  <div className="mt-0.5 text-[11px] leading-snug text-muted">
+                    {opt.description}
+                  </div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // --- User question form (AskUserQuestion) ---
 
 interface QuestionDef {
@@ -2524,10 +2810,12 @@ interface QuestionDef {
 
 function UserQuestionForm({
   questions,
+  queueSize,
   onSubmit,
   onSkip,
 }: {
   questions: QuestionDef[];
+  queueSize: number;
   onSubmit: (answers: string[]) => void;
   onSkip: () => void;
 }) {
@@ -2586,6 +2874,11 @@ function UserQuestionForm({
 
   return (
     <div className="overflow-hidden rounded-xl border border-blue-500/30 bg-popover">
+      {queueSize > 1 && (
+        <div className="border-b border-blue-500/20 bg-blue-500/10 px-5 py-1.5 text-[11px] font-medium text-blue-300 light:text-blue-700">
+          {queueSize - 1} more question{queueSize - 1 === 1 ? '' : 's'} queued
+        </div>
+      )}
       {questions.map((q, qIdx) => {
         const multi = q.allowMultiple ?? false;
         const selected = selections[qIdx] ?? new Set<string>();
@@ -2883,13 +3176,7 @@ function ContextSubPanel({ panel, instanceId, sessionInfo, onAttach, onClose }: 
             onAttach({ type: 'commit', label: `${hash} ${subject}`, value: `Commit ${hash}: ${subject}` });
           }} />
         ) : panel === 'changes' ? (
-          <ChangesList data={data} onAttach={() => {
-            const d = data as { files: { status: string; path: string }[]; diffSummary: string } | null;
-            if (d) {
-              const summary = d.files.map(f => `${f.status} ${f.path}`).join('\n');
-              onAttach({ type: 'changes', label: `${d.files.length} changed files`, value: summary + '\n\n' + d.diffSummary });
-            }
-          }} />
+          <ChangesList data={data} instanceId={instanceId} onAttach={onAttach} />
         ) : panel === 'mcp' ? (
           <McpServersList sessionInfo={sessionInfo} />
         ) : null}
@@ -2971,7 +3258,7 @@ function CommitsList({ data, filter, onSelect }: { data: unknown; filter: string
   );
 }
 
-function ChangesList({ data, onAttach }: { data: unknown; onAttach: () => void }) {
+function ChangesList({ data, instanceId, onAttach }: { data: unknown; instanceId: string; onAttach: (item: ContextItem) => void }) {
   const d = data as { files: { status: string; path: string }[]; diffSummary: string } | null;
   if (!d?.files || d.files.length === 0) {
     return <p className="py-4 text-center text-[12px] text-faint">No local changes</p>;
@@ -2979,27 +3266,42 @@ function ChangesList({ data, onAttach }: { data: unknown; onAttach: () => void }
 
   const statusColor = (s: string) => {
     if (s === 'M') return 'text-yellow-500';
-    if (s === 'A' || s === '??' || s === '??') return 'text-emerald-300';
+    if (s === 'A' || s === '??') return 'text-emerald-300';
     if (s === 'D') return 'text-rose-300/70';
     return 'text-muted';
+  };
+
+  const statusLabel = (s: string) => (s === '??' ? 'U' : s);
+
+  const handleAttachFile = async (filePath: string) => {
+    try {
+      const res = await fetch(`/api/instances/${instanceId}/context/diff`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath }),
+      });
+      const result = await res.json() as { diff?: string; error?: string };
+      const diff = result.diff?.trim() ? result.diff : `(no diff available for ${filePath})`;
+      onAttach({ type: 'changes', label: filePath, value: `Diff for ${filePath}:\n\n${diff}` });
+    } catch {
+      onAttach({ type: 'changes', label: filePath, value: `(failed to fetch diff for ${filePath})` });
+    }
   };
 
   return (
     <div>
       {d.files.map((file, i) => (
-        <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
-          <span className={`shrink-0 font-mono ${statusColor(file.status)}`}>{file.status}</span>
-          <span className="truncate text-tertiary">{file.path}</span>
-        </div>
-      ))}
-      <div className="border-t border-border-default px-3 py-2">
         <button
-          onClick={onAttach}
-          className="w-full rounded-lg bg-blue-500/60 px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-blue-500/80"
+          key={i}
+          onClick={() => handleAttachFile(file.path)}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-hover"
+          title={`Attach diff for ${file.path}`}
         >
-          Attach all changes ({d.files.length} files)
+          <span className={`shrink-0 font-mono ${statusColor(file.status)}`}>{statusLabel(file.status)}</span>
+          <FileDiff className="h-3 w-3 shrink-0 text-faint" />
+          <span className="truncate text-tertiary">{file.path}</span>
         </button>
-      </div>
+      ))}
     </div>
   );
 }

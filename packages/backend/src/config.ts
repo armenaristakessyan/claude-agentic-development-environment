@@ -16,6 +16,8 @@ interface AppConfig {
   };
   theme: 'dark' | 'light';
   zoom: 100 | 110 | 125 | 150;
+  /** Id of the task the user had selected last, restored on next load. */
+  lastSelectedTaskId?: string | null;
 }
 
 const DEFAULT_CONFIG: AppConfig = {

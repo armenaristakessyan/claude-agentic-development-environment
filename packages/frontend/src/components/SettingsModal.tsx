@@ -75,6 +75,12 @@ export default function SettingsModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         </div>
+
+        {/* Footer — version */}
+        <div className="flex items-center justify-between border-t border-border-default px-5 py-2.5">
+          <span className="text-[11px] text-muted">ADE</span>
+          <span className="font-mono text-[11px] text-muted">v{__APP_VERSION__}</span>
+        </div>
       </div>
     </div>
   );

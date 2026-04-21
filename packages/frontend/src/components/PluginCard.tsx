@@ -57,7 +57,7 @@ export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUn
       <div className="flex items-center gap-1.5">
         {/* Segment tag */}
         {plugin.segment && (
-          <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-300">
+          <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-300 light:bg-blue-100 light:text-blue-800">
             {plugin.segment}
           </span>
         )}
@@ -84,7 +84,7 @@ export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUn
 
         {/* Install/Uninstall button */}
         {isLoading ? (
-          <span className="flex items-center gap-1 rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300">
+          <span className="flex items-center gap-1 rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300 light:bg-blue-100 light:text-blue-800">
             <Loader className="h-2.5 w-2.5 animate-spin" />
             {loadingLabel}
           </span>
@@ -100,7 +100,7 @@ export default function PluginCard({ plugin, isLoading, onClick, onInstall, onUn
         ) : (
           <span
             onClick={e => { e.stopPropagation(); onInstall(); }}
-            className="rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300 opacity-0 transition-all group-hover:opacity-100 hover:bg-blue-500/20"
+            className="rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300 light:bg-blue-100 light:text-blue-800 light:hover:bg-blue-200 opacity-0 transition-all group-hover:opacity-100 hover:bg-blue-500/20"
           >
             Install
           </span>

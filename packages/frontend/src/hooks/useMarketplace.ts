@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { PluginMetadata } from '../types';
+import { useSocket } from './useSocket';
 
 export interface MarketplaceSourceInfo {
   name: string;
@@ -50,6 +51,18 @@ export function useMarketplace() {
     fetchPlugins();
     fetchSources();
   }, [fetchPlugins, fetchSources]);
+
+  // Backend broadcasts `marketplace:updated` whenever sources/plugins change
+  // (install, uninstall, add, remove, auto-update). Refetch so all open tabs stay in sync.
+  const socket = useSocket();
+  useEffect(() => {
+    const handler = () => {
+      fetchPlugins();
+      fetchSources();
+    };
+    socket.on('marketplace:updated', handler);
+    return () => { socket.off('marketplace:updated', handler); };
+  }, [socket, fetchPlugins, fetchSources]);
 
   const addSource = useCallback(async (repo: string, autoUpdate = true): Promise<{ name: string; pluginCount: number; error?: string }> => {
     setAddingSource(true);
@@ -106,15 +119,6 @@ export function useMarketplace() {
     }
   }, []);
 
-  /** Refresh slash commands cache so the UI picks up plugin changes */
-  const reloadPluginsOnInstances = useCallback(async () => {
-    try {
-      // Force backend to re-fetch slash commands from the SDK
-      await fetch('/api/slash-commands?refresh=1');
-    } catch { /* ignore */ }
-    window.dispatchEvent(new Event('plugins-changed'));
-  }, []);
-
   const installPlugin = useCallback(async (marketplace: string, name: string) => {
     const key = `${marketplace}/${name}`;
     setInstallingPlugins(prev => new Set(prev).add(key));
@@ -126,14 +130,13 @@ export function useMarketplace() {
             ? { ...p, isInstalled: true }
             : p
         ));
-        await reloadPluginsOnInstances();
       }
     } catch (err) {
       console.error('Failed to install plugin:', err);
     } finally {
       setInstallingPlugins(prev => { const next = new Set(prev); next.delete(key); return next; });
     }
-  }, [reloadPluginsOnInstances]);
+  }, []);
 
   const uninstallPlugin = useCallback(async (marketplace: string, name: string) => {
     const key = `${marketplace}/${name}`;
@@ -146,14 +149,13 @@ export function useMarketplace() {
             ? { ...p, isInstalled: false }
             : p
         ));
-        await reloadPluginsOnInstances();
       }
     } catch (err) {
       console.error('Failed to uninstall plugin:', err);
     } finally {
       setInstallingPlugins(prev => { const next = new Set(prev); next.delete(key); return next; });
     }
-  }, [reloadPluginsOnInstances]);
+  }, []);
 
   const refreshMarketplace = useCallback(async () => {
     try {

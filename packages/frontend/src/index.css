@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* ── Custom variants ────────────────────────────────────────────────── */
+
+/* Enable `light:` utility prefix to target elements under [data-theme="light"].
+   Lets components write `text-emerald-300 light:text-emerald-700` to keep
+   dark-mode styling while fixing contrast under the light palette. */
+@custom-variant light (&:where([data-theme="light"] *));
+
 /* ── Semantic design tokens ─────────────────────────────────────────── */
 
 @theme {
@@ -149,4 +156,46 @@ html, body, #root {
 
 ::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+/* ── Effort level animations ───────────────────────────────────────── */
+
+@keyframes effort-xhigh-pulse {
+  0%, 100% { color: #c4b5fd; filter: drop-shadow(0 0 0 rgba(196, 181, 253, 0)); }
+  50%      { color: #a78bfa; filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.7)); }
+}
+
+.effort-xhigh {
+  animation: effort-xhigh-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes effort-max-rainbow {
+  0%   { color: #f87171; }   /* red */
+  16%  { color: #fb923c; }   /* orange */
+  33%  { color: #facc15; }   /* yellow */
+  50%  { color: #4ade80; }   /* green */
+  66%  { color: #38bdf8; }   /* blue */
+  83%  { color: #a78bfa; }   /* violet */
+  100% { color: #f472b6; }   /* pink */
+}
+
+.effort-max {
+  animation: effort-max-rainbow 3s linear infinite;
+  filter: drop-shadow(0 0 4px currentColor);
+}
+
+/* ── Panel slide / push timing ─────────────────────────────────────── */
+
+.panel-transition {
+  transition-property: width, margin;
+  transition-duration: 260ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1); /* easeOutExpo-ish */
+  will-change: width;
+}
+
+/* Suppress panel transitions while a resize handle is being dragged, so
+   width updates per mousemove apply instantly instead of each mousemove
+   starting a fresh 260ms animation. */
+body.resizing .panel-transition {
+  transition: none;
 }

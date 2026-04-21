@@ -16,11 +16,15 @@ files:
   - node_modules/**/*
   - package.json
 
-# Backend must be outside ASAR — fork() can't execute inside archives
-# node-pty has native binaries that also can't be in ASAR
+# Backend must be outside ASAR — fork() can't execute inside archives.
+# node-pty has native binaries that also can't be in ASAR.
+# The renderer files must be unpacked too because we now run the backend
+# under a real Node binary (see electron/main.ts findNodeBinary), which
+# can't traverse into app.asar to serve static files.
 asarUnpack:
   - packages/backend/**/*
   - node_modules/**/*
+  - electron/dist/renderer/**/*
 
 # Frontend is pre-built into electron/dist/renderer and served by Express
 extraResources:
@@ -40,3 +44,6 @@ asar: true
 # node-pty ships prebuilds for macOS arm64, no rebuild needed
 nodeGypRebuild: false
 npmRebuild: false
+
+# Restore execute permissions on node-pty spawn-helper after packaging
+afterPack: electron/afterPack.js

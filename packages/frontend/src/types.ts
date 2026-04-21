@@ -68,7 +68,7 @@ export interface SessionInfo {
 }
 
 export interface ContextAttachment {
-  type: 'file' | 'branch' | 'commit' | 'changes';
+  type: 'file' | 'upload' | 'branch' | 'commit' | 'changes';
   label: string;
 }
 
@@ -83,6 +83,24 @@ export interface AttentionQueueItem {
   instanceId: string;
   projectName: string;
   enteredAt: number;
+}
+
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  description?: string;
+  supportsEffort?: boolean;
+  supportedEffortLevels?: EffortLevel[];
+}
+
+export interface TaskWarmupResult {
+  modelOptions: ModelOption[];
+  slashCommands: string[];
+  mcpServers: { name: string; status: string }[];
+  tools: string[];
+  cliVersion: string | null;
 }
 
 export interface AgentTask {

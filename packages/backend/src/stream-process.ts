@@ -9,6 +9,7 @@ import type {
   CanUseTool,
   PermissionResult,
   SessionMessage,
+  ModelInfo,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { BetaContentBlock } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import type { AppConfig } from './config.js';
@@ -84,6 +85,13 @@ interface SpawnOptions {
   model?: string;
   effort?: string;
   permissionMode?: string;
+  /** Preserve original creation timestamp when resuming a task */
+  createdAt?: Date;
+  /** Previously-approved tools for this task (per-task allowlist) */
+  approvedTools?: string[];
+  /** Reuse a specific id (used when resuming a persisted task at boot so
+   *  the instance id stays stable across backend restarts). */
+  id?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,10 +129,10 @@ interface ProcessHandle {
   abortController: AbortController | null;
   /** Async generator that feeds user messages into the conversation */
   inputController: InputController | null;
-  /** Pending permission callback (one at a time) */
-  pendingPermission: PendingPermission | null;
-  /** Pending AskUserQuestion callback */
-  pendingUserQuestion: PendingUserQuestion | null;
+  /** Pending permission callbacks, keyed by toolUseId (supports concurrent requests) */
+  pendingPermissions: Map<string, PendingPermission>;
+  /** Pending AskUserQuestion callbacks, keyed by toolUseId (supports concurrent requests) */
+  pendingUserQuestions: Map<string, PendingUserQuestion>;
   /** Per-instance approved tools (for "ask" permission mode) */
   approvedTools: Set<string>;
   /** In-progress content blocks for the current turn (flushed on result) */
@@ -182,7 +190,10 @@ class InputController {
 export class StreamProcessManager extends EventEmitter {
   private handles = new Map<string, ProcessHandle>();
   private cachedSlashCommands: string[] | null = null;
+  private cachedSupportedModels: ModelInfo[] | null = null;
   private pluginPathsProvider: (() => string[]) | null = null;
+  private cwdPrefetchCache = new Map<string, { slashCommands: string[]; models: ModelInfo[]; mcpServers: { name: string; status: string }[]; tools: string[]; cliVersion: string | null }>();
+  private cwdPrefetchInFlight = new Map<string, Promise<{ slashCommands: string[]; models: ModelInfo[]; mcpServers: { name: string; status: string }[]; tools: string[]; cliVersion: string | null }>>();
 
   constructor(private config: AppConfig, private taskStore?: TaskStore) {
     super();
@@ -202,9 +213,13 @@ export class StreamProcessManager extends EventEmitter {
     return this.cachedSlashCommands ?? [];
   }
 
-  /** Pre-fetch slash commands by spawning a short-lived SDK query */
+  getCachedSupportedModels(): ModelInfo[] {
+    return this.cachedSupportedModels ?? [];
+  }
+
+  /** Pre-fetch slash commands and supported models by spawning a short-lived SDK query */
   async prefetchSlashCommands(force = false): Promise<void> {
-    if (this.cachedSlashCommands && !force) return;
+    if (this.cachedSlashCommands && this.cachedSupportedModels && !force) return;
     try {
       const plugins = this.getPluginConfigs();
       const conversation = query({
@@ -220,7 +235,12 @@ export class StreamProcessManager extends EventEmitter {
       for await (const msg of conversation) {
         if (msg.type === 'system' && msg.subtype === 'init') {
           this.cachedSlashCommands = msg.slash_commands ?? [];
-          console.log(`[stream-process] Pre-fetched ${this.cachedSlashCommands.length} slash commands`);
+          try {
+            this.cachedSupportedModels = await conversation.supportedModels();
+            console.log(`[stream-process] Pre-fetched ${this.cachedSlashCommands.length} slash commands, ${this.cachedSupportedModels.length} models`);
+          } catch (err) {
+            console.log('[stream-process] Failed to fetch supported models during prefetch:', err);
+          }
           break;
         }
       }
@@ -230,12 +250,94 @@ export class StreamProcessManager extends EventEmitter {
     }
   }
 
+  /**
+   * Prefetch slash commands + supported models for a specific cwd so the UI
+   * can display the correct project-local plugins. Cached per-cwd; concurrent
+   * callers for the same cwd share the same in-flight query.
+   */
+  async prefetchForCwd(cwd: string): Promise<{ slashCommands: string[]; models: ModelInfo[]; mcpServers: { name: string; status: string }[]; tools: string[]; cliVersion: string | null }> {
+    const cached = this.cwdPrefetchCache.get(cwd);
+    if (cached) return cached;
+    const inFlight = this.cwdPrefetchInFlight.get(cwd);
+    if (inFlight) return inFlight;
+
+    const run = (async () => {
+      let slashCommands: string[] = [];
+      let models: ModelInfo[] = [];
+      let mcpServers: { name: string; status: string }[] = [];
+      let tools: string[] = [];
+      let cliVersion: string | null = null;
+      try {
+        const plugins = this.getPluginConfigs();
+        const conversation = query({
+          prompt: 'hi',
+          options: {
+            cwd,
+            maxTurns: 0,
+            persistSession: false,
+            systemPrompt: { type: 'preset', preset: 'claude_code' },
+            settingSources: ['project', 'local'],
+            plugins: plugins.length > 0 ? plugins : undefined,
+          },
+        });
+        for await (const msg of conversation) {
+          if (msg.type === 'system' && msg.subtype === 'init') {
+            slashCommands = msg.slash_commands ?? [];
+            if (msg.mcp_servers) mcpServers = msg.mcp_servers;
+            if (msg.tools) tools = msg.tools;
+            if (msg.claude_code_version) cliVersion = msg.claude_code_version;
+            try {
+              models = await conversation.supportedModels();
+            } catch (err) {
+              console.log(`[stream-process] prefetchForCwd supportedModels failed for ${cwd}:`, err);
+            }
+            break;
+          }
+        }
+        conversation.close();
+      } catch (err) {
+        console.log(`[stream-process] prefetchForCwd failed for ${cwd}:`, err);
+      }
+
+      // Fallback: if the cwd-scoped query didn't return models, use the
+      // global cache (warming it if needed) so the dropdown always has
+      // labels available.
+      if (models.length === 0) {
+        if (!this.cachedSupportedModels || this.cachedSupportedModels.length === 0) {
+          await this.prefetchSlashCommands();
+        }
+        models = this.cachedSupportedModels ?? [];
+      }
+      if (slashCommands.length === 0) {
+        slashCommands = this.cachedSlashCommands ?? [];
+      }
+
+      const result = { slashCommands, models, mcpServers, tools, cliVersion };
+      console.log(`[stream-process] prefetchForCwd(${cwd}): ${slashCommands.length} slash commands, ${models.length} models, ${mcpServers.length} mcp servers, ${tools.length} tools, cli=${cliVersion ?? 'unknown'}`);
+      if (slashCommands.length > 0 || models.length > 0 || mcpServers.length > 0 || tools.length > 0 || cliVersion) {
+        this.cwdPrefetchCache.set(cwd, result);
+        if (!this.cachedSlashCommands && slashCommands.length > 0) this.cachedSlashCommands = slashCommands;
+        if (!this.cachedSupportedModels && models.length > 0) this.cachedSupportedModels = models;
+      }
+      this.cwdPrefetchInFlight.delete(cwd);
+      return result;
+    })();
+
+    this.cwdPrefetchInFlight.set(cwd, run);
+    return run;
+  }
+
+  /** Invalidate the per-cwd prefetch cache (e.g. when plugins change). */
+  invalidatePrefetchCache(): void {
+    this.cwdPrefetchCache.clear();
+  }
+
   async createInstance(options: SpawnOptions): Promise<StreamInstance> {
     if (this.handles.size >= this.config.maxInstances) {
       throw new Error(`Maximum instances reached (${this.config.maxInstances})`);
     }
 
-    const id = randomUUID();
+    const id = options.id ?? randomUUID();
     const projectName = path.basename(options.projectPath);
 
     const instance: StreamInstance = {
@@ -243,7 +345,7 @@ export class StreamProcessManager extends EventEmitter {
       projectPath: options.projectPath,
       projectName,
       status: INSTANCE_STATUS.WAITING_INPUT,
-      createdAt: new Date(),
+      createdAt: options.createdAt ?? new Date(),
       lastActivity: new Date(),
       taskDescription: options.taskDescription ?? null,
       worktreePath: options.worktreePath ?? null,
@@ -266,9 +368,9 @@ export class StreamProcessManager extends EventEmitter {
       conversation: null,
       abortController: null,
       inputController: null,
-      pendingPermission: null,
-      pendingUserQuestion: null,
-      approvedTools: new Set<string>(),
+      pendingPermissions: new Map<string, PendingPermission>(),
+      pendingUserQuestions: new Map<string, PendingUserQuestion>(),
+      approvedTools: new Set<string>(options.approvedTools ?? []),
       streamingBlocks: [],
     };
 
@@ -337,6 +439,7 @@ export class StreamProcessManager extends EventEmitter {
       const contextParts = options.context.map(c => {
         switch (c.type) {
           case 'file': return `[File: ${c.label}]\n${c.value}`;
+          case 'upload': return `[Attached file: ${c.label}]\nPath: ${c.value}\nUse the Read tool to open it when you need its contents.`;
           case 'branch': return `[Git Branch: ${c.label}]`;
           case 'commit': return `[Git Commit: ${c.label}]\n${c.value}`;
           case 'changes': return `[Local Changes]\n${c.value}`;
@@ -395,13 +498,14 @@ export class StreamProcessManager extends EventEmitter {
         const questions = (input as { questions?: unknown[] }).questions;
         if (questions && Array.isArray(questions)) {
           return new Promise<PermissionResult>(resolve => {
-            handle.pendingUserQuestion = {
-              toolUseId: callbackOptions.toolUseID,
+            const toolUseId = callbackOptions.toolUseID;
+            handle.pendingUserQuestions.set(toolUseId, {
+              toolUseId,
               questions: questions as PendingUserQuestion['questions'],
               resolve,
-            };
+            });
             this.emit('user_question', instanceId, {
-              toolUseId: callbackOptions.toolUseID,
+              toolUseId,
               questions,
             });
           });
@@ -419,21 +523,22 @@ export class StreamProcessManager extends EventEmitter {
         const filePath = (input as Record<string, unknown>).file_path as string
           ?? (input as Record<string, unknown>).command as string
           ?? undefined;
+        const toolUseId = callbackOptions.toolUseID;
 
-        handle.pendingPermission = {
+        handle.pendingPermissions.set(toolUseId, {
           toolName,
-          toolInput: input,
-          toolUseId: callbackOptions.toolUseID,
+          toolInput: input as Record<string, unknown>,
+          toolUseId,
           filePath,
           title: callbackOptions.title,
           description: callbackOptions.description,
           resolve,
-        };
+        });
 
         this.emit('permission_request', instanceId, {
           toolName,
           toolInput: input,
-          toolUseId: callbackOptions.toolUseID,
+          toolUseId,
           filePath,
           title: callbackOptions.title,
           description: callbackOptions.description,
@@ -591,7 +696,11 @@ export class StreamProcessManager extends EventEmitter {
       case 'system': {
         if (msg.subtype === 'init') {
           if (msg.session_id) instance.sessionId = msg.session_id;
-          if (msg.model) instance.model = msg.model;
+          // Only set model from the SDK init if we don't already have one
+          // chosen by the user. The SDK returns resolved names (e.g.
+          // claude-sonnet-4-6[1m]) but our dropdown works in aliases
+          // (sonnet[1m]) — overwriting here breaks the dropdown lookup.
+          if (msg.model && !instance.model) instance.model = msg.model;
           if (msg.permissionMode) instance.permissionMode = msg.permissionMode;
           if (msg.tools) instance.tools = msg.tools;
           if (msg.mcp_servers) instance.mcpServers = msg.mcp_servers;
@@ -792,11 +901,33 @@ export class StreamProcessManager extends EventEmitter {
     handle.approvedTools.add(toolName);
     console.log(`[stream-process] Approved tool '${toolName}' for instance ${instanceId}`);
 
-    // If there's a pending permission for this tool, resolve it
-    if (handle.pendingPermission && handle.pendingPermission.toolName === toolName) {
-      const pending = handle.pendingPermission;
-      handle.pendingPermission = null;
-      pending.resolve({ behavior: 'allow', updatedInput: pending.toolInput });
+    // Persist per-task allowlist so it survives restart
+    if (this.taskStore) {
+      this.taskStore.setApprovedTools(instanceId, [...handle.approvedTools]).catch(err => {
+        console.log(`[stream-process] Failed to persist approved tools: ${err}`);
+      });
+    }
+
+    // Resolve any pending permission requests for this tool (there may be
+    // multiple concurrent ones after an "always allow" click).
+    for (const [toolUseId, pending] of handle.pendingPermissions) {
+      if (pending.toolName === toolName) {
+        handle.pendingPermissions.delete(toolUseId);
+        pending.resolve({ behavior: 'allow', updatedInput: pending.toolInput });
+      }
+    }
+  }
+
+  /** Remove a tool from the per-task allowlist (and persist). */
+  revokeTool(instanceId: string, toolName: string): void {
+    const handle = this.handles.get(instanceId);
+    if (!handle) return;
+    handle.approvedTools.delete(toolName);
+    console.log(`[stream-process] Revoked tool '${toolName}' for instance ${instanceId}`);
+    if (this.taskStore) {
+      this.taskStore.setApprovedTools(instanceId, [...handle.approvedTools]).catch(err => {
+        console.log(`[stream-process] Failed to persist approved tools: ${err}`);
+      });
     }
   }
 
@@ -805,11 +936,10 @@ export class StreamProcessManager extends EventEmitter {
    */
   resolvePermission(instanceId: string, toolUseId: string, allow: boolean, message?: string): void {
     const handle = this.handles.get(instanceId);
-    if (!handle?.pendingPermission) return;
-    if (handle.pendingPermission.toolUseId !== toolUseId) return;
+    const pending = handle?.pendingPermissions.get(toolUseId);
+    if (!pending) return;
 
-    const pending = handle.pendingPermission;
-    handle.pendingPermission = null;
+    handle!.pendingPermissions.delete(toolUseId);
 
     if (allow) {
       pending.resolve({ behavior: 'allow', updatedInput: pending.toolInput });
@@ -823,11 +953,10 @@ export class StreamProcessManager extends EventEmitter {
    */
   resolveUserQuestion(instanceId: string, toolUseId: string, answer: string): void {
     const handle = this.handles.get(instanceId);
-    if (!handle?.pendingUserQuestion) return;
-    if (handle.pendingUserQuestion.toolUseId !== toolUseId) return;
+    const pending = handle?.pendingUserQuestions.get(toolUseId);
+    if (!pending) return;
 
-    const pending = handle.pendingUserQuestion;
-    handle.pendingUserQuestion = null;
+    handle!.pendingUserQuestions.delete(toolUseId);
 
     // Return allow with the user's answer injected into the input
     pending.resolve({
@@ -842,32 +971,31 @@ export class StreamProcessManager extends EventEmitter {
   }
 
   /**
-   * Get any pending permission request or user question for an instance.
-   * Used to re-emit state after frontend reconnects.
+   * Get any pending permission requests and user questions for an instance.
+   * Used to re-emit state after frontend reconnects. Returns arrays because
+   * Claude can have multiple concurrent requests in flight (e.g. from parallel
+   * subagents); a single-slot representation would silently drop all but one.
    */
   getPendingState(instanceId: string): {
-    pendingPermission: { toolName: string; toolInput: Record<string, unknown>; toolUseId: string; filePath?: string; title?: string; description?: string } | null;
-    pendingUserQuestion: { toolUseId: string; questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; allowMultiple?: boolean }> } | null;
+    pendingPermissions: Array<{ toolName: string; toolInput: Record<string, unknown>; toolUseId: string; filePath?: string; title?: string; description?: string }>;
+    pendingUserQuestions: Array<{ toolUseId: string; questions: Array<{ question: string; header?: string; options?: Array<{ label: string; description?: string }>; allowMultiple?: boolean }> }>;
   } {
     const handle = this.handles.get(instanceId);
-    if (!handle) return { pendingPermission: null, pendingUserQuestion: null };
-
-    const pp = handle.pendingPermission;
-    const pq = handle.pendingUserQuestion;
+    if (!handle) return { pendingPermissions: [], pendingUserQuestions: [] };
 
     return {
-      pendingPermission: pp ? {
+      pendingPermissions: Array.from(handle.pendingPermissions.values()).map(pp => ({
         toolName: pp.toolName,
         toolInput: pp.toolInput,
         toolUseId: pp.toolUseId,
         filePath: pp.filePath,
         title: pp.title,
         description: pp.description,
-      } : null,
-      pendingUserQuestion: pq ? {
+      })),
+      pendingUserQuestions: Array.from(handle.pendingUserQuestions.values()).map(pq => ({
         toolUseId: pq.toolUseId,
         questions: pq.questions,
-      } : null,
+      })),
     };
   }
 
@@ -891,6 +1019,73 @@ export class StreamProcessManager extends EventEmitter {
     }));
   }
 
+  /**
+   * Re-prefetch slash commands for every distinct cwd that has an active
+   * instance, then broadcast the fresh list through the existing `session`
+   * event channel. Called after plugin install/uninstall so the `/` autocomplete
+   * picks up new commands without restarting the app or spinning the chat loader.
+   *
+   * Spawns at most one short-lived SDK query per distinct cwd (maxInstances-bounded).
+   */
+  async refreshSlashCommandsForAllActive(): Promise<void> {
+    const cwdToInstances = new Map<string, string[]>();
+    for (const [id, handle] of this.handles.entries()) {
+      const cwd = handle.instance.worktreePath ?? handle.instance.projectPath;
+      const list = cwdToInstances.get(cwd) ?? [];
+      list.push(id);
+      cwdToInstances.set(cwd, list);
+    }
+    if (cwdToInstances.size === 0) return;
+
+    this.invalidatePrefetchCache();
+
+    await Promise.allSettled(
+      Array.from(cwdToInstances.entries()).map(async ([cwd, ids]) => {
+        try {
+          const result = await this.prefetchForCwd(cwd);
+          for (const id of ids) {
+            this.emit('session', id, {
+              slashCommands: result.slashCommands,
+              tools: result.tools,
+              mcpServers: result.mcpServers,
+            });
+          }
+          console.log(`[stream-process] Refreshed slash commands for ${cwd} (${result.slashCommands.length} cmds) → ${ids.length} instance(s)`);
+        } catch (err) {
+          console.log(`[stream-process] Slash command refresh failed for ${cwd}:`, err);
+        }
+      }),
+    );
+  }
+
+  /**
+   * Push `/reload-plugins` into every idle live conversation so Claude Code
+   * picks up newly installed/uninstalled plugins without restarting the app.
+   * Conversations that are currently processing are skipped — queueing a
+   * slash command behind a real turn tends to confuse the SDK. Returns the
+   * list of instanceIds the command was sent to.
+   */
+  reloadPluginsInAllActive(): string[] {
+    const reloaded: string[] = [];
+    for (const [id, handle] of this.handles.entries()) {
+      if (!handle.conversation || !handle.inputController) continue;
+      if (handle.instance.status !== INSTANCE_STATUS.WAITING_INPUT) continue;
+      try {
+        handle.inputController.push({
+          type: 'user',
+          message: { role: 'user', content: '/reload-plugins' },
+          parent_tool_use_id: null,
+          session_id: handle.instance.sessionId ?? '',
+        });
+        reloaded.push(id);
+        console.log(`[stream-process] /reload-plugins sent to instance ${id}`);
+      } catch (err) {
+        console.log(`[stream-process] Failed to send /reload-plugins to ${id}:`, err);
+      }
+    }
+    return reloaded;
+  }
+
   get(instanceId: string): StreamInstance | undefined {
     const handle = this.handles.get(instanceId);
     return handle ? { ...handle.instance } : undefined;
@@ -899,6 +1094,46 @@ export class StreamProcessManager extends EventEmitter {
   getMessages(instanceId: string): ChatMessage[] {
     const handle = this.handles.get(instanceId);
     return handle ? [...handle.instance.messages] : [];
+  }
+
+  /**
+   * Update model / effort / permissionMode for an instance. Persists to the
+   * in-memory instance and — if a conversation is live — applies to the SDK.
+   */
+  async updateSettings(instanceId: string, settings: {
+    model?: string;
+    effort?: string;
+    permissionMode?: string;
+  }): Promise<void> {
+    const handle = this.handles.get(instanceId);
+    if (!handle) throw new Error(`Instance ${instanceId} not found`);
+    const instance = handle.instance;
+
+    if (settings.model !== undefined) instance.model = settings.model;
+    if (settings.effort !== undefined) instance.effort = settings.effort;
+    if (settings.permissionMode !== undefined) instance.permissionMode = settings.permissionMode;
+
+    if (handle.conversation) {
+      if (settings.model) {
+        handle.conversation.setModel(settings.model).catch(err => {
+          console.log(`[stream-process] setModel failed: ${err}`);
+        });
+      }
+      if (settings.permissionMode) {
+        const sdkMode = this.mapPermissionMode(settings.permissionMode);
+        handle.conversation.setPermissionMode(sdkMode).catch(err => {
+          console.log(`[stream-process] setPermissionMode failed: ${err}`);
+        });
+      }
+    }
+
+    if (this.taskStore) {
+      await this.taskStore.updateSettings(instanceId, {
+        model: settings.model,
+        effort: settings.effort,
+        permissionMode: settings.permissionMode,
+      });
+    }
   }
 
   /**
@@ -969,8 +1204,14 @@ export class StreamProcessManager extends EventEmitter {
     handle.instance.sessionId = null;
     handle.instance.messages = [];
     handle.approvedTools.clear();
-    handle.pendingPermission = null;
-    handle.pendingUserQuestion = null;
+    for (const p of handle.pendingPermissions.values()) {
+      p.resolve({ behavior: 'deny', message: 'Session cleared' });
+    }
+    handle.pendingPermissions.clear();
+    for (const q of handle.pendingUserQuestions.values()) {
+      q.resolve({ behavior: 'deny', message: 'Session cleared' });
+    }
+    handle.pendingUserQuestions.clear();
     handle.instance.status = INSTANCE_STATUS.WAITING_INPUT;
     this.emit('status', instanceId, INSTANCE_STATUS.WAITING_INPUT);
     console.log(`[stream-process] Session cleared for instance ${instanceId}`);
@@ -988,15 +1229,15 @@ export class StreamProcessManager extends EventEmitter {
       handle.inputController.end();
     }
 
-    // Reject any pending permission/question
-    if (handle.pendingPermission) {
-      handle.pendingPermission.resolve({ behavior: 'deny', message: 'Instance killed' });
-      handle.pendingPermission = null;
+    // Reject any pending permissions/questions
+    for (const p of handle.pendingPermissions.values()) {
+      p.resolve({ behavior: 'deny', message: 'Instance killed' });
     }
-    if (handle.pendingUserQuestion) {
-      handle.pendingUserQuestion.resolve({ behavior: 'deny', message: 'Instance killed' });
-      handle.pendingUserQuestion = null;
+    handle.pendingPermissions.clear();
+    for (const q of handle.pendingUserQuestions.values()) {
+      q.resolve({ behavior: 'deny', message: 'Instance killed' });
     }
+    handle.pendingUserQuestions.clear();
 
     handle.instance.status = INSTANCE_STATUS.EXITED;
     this.emit('status', instanceId, INSTANCE_STATUS.EXITED);
@@ -1017,14 +1258,14 @@ export class StreamProcessManager extends EventEmitter {
     for (const [id, handle] of this.handles) {
       if (handle.conversation) handle.conversation.close();
       if (handle.inputController) handle.inputController.end();
-      if (handle.pendingPermission) {
-        handle.pendingPermission.resolve({ behavior: 'deny', message: 'Server shutting down' });
-        handle.pendingPermission = null;
+      for (const p of handle.pendingPermissions.values()) {
+        p.resolve({ behavior: 'deny', message: 'Server shutting down' });
       }
-      if (handle.pendingUserQuestion) {
-        handle.pendingUserQuestion.resolve({ behavior: 'deny', message: 'Server shutting down' });
-        handle.pendingUserQuestion = null;
+      handle.pendingPermissions.clear();
+      for (const q of handle.pendingUserQuestions.values()) {
+        q.resolve({ behavior: 'deny', message: 'Server shutting down' });
       }
+      handle.pendingUserQuestions.clear();
       this.handles.delete(id);
     }
   }

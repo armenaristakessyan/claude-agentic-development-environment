@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell, Tray, Menu, nativeImage } from 'electron';
+import fs from 'fs';
 import path from 'path';
-import { fork, execSync, type ChildProcess } from 'child_process';
+import { fork, spawn, execSync, type ChildProcess } from 'child_process';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -19,6 +20,31 @@ function getShellPath(): string {
   }
 }
 
+/**
+ * Find a real Node.js binary to run the backend under. Falls back to undefined
+ * if none is available (caller will use Electron's own ELECTRON_RUN_AS_NODE).
+ *
+ * We avoid ELECTRON_RUN_AS_NODE in the packaged build because the Electron
+ * binary's macOS signing entitlements block node-pty's
+ * `posix_spawn(..., POSIX_SPAWN_CLOEXEC_DEFAULT)` call used to launch the PTY
+ * spawn-helper, which surfaces as `posix_spawnp failed`.
+ */
+function findNodeBinary(pathEnv: string): string | undefined {
+  const candidates = [
+    ...pathEnv.split(':').filter(Boolean).map(p => path.join(p, 'node')),
+    '/opt/homebrew/bin/node',
+    '/usr/local/bin/node',
+    '/usr/bin/node',
+  ];
+  for (const c of candidates) {
+    try {
+      fs.accessSync(c, fs.constants.X_OK);
+      return c;
+    } catch { /* keep looking */ }
+  }
+  return undefined;
+}
+
 function getIconPath(): string {
   if (isDev) {
     return path.join(__dirname, '..', '..', 'packages', 'frontend', 'public', 'pwa-512x512.png');
@@ -31,9 +57,13 @@ function startBackend(): Promise<number> {
     // In production, asarUnpack puts files in app.asar.unpacked/ alongside app.asar
     const unpackedPath = app.getAppPath().replace('app.asar', 'app.asar.unpacked');
 
+    // In production, the renderer lives inside app.asar but is also unpacked
+    // to app.asar.unpacked (see electron-builder.yml). The backend runs under
+    // a real Node binary which can't traverse into app.asar — point it at the
+    // unpacked copy.
     const staticDir = isDev
       ? undefined
-      : path.join(__dirname, 'renderer');
+      : path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'renderer');
 
     // fork() can't execute inside ASAR — use unpacked path in production
     const backendEntry = isDev
@@ -50,11 +80,30 @@ function startBackend(): Promise<number> {
     if (staticDir) {
       env.STATIC_DIR = staticDir;
     }
+    // In packaged mode, node-pty's spawn-helper must live outside the signed
+    // .app bundle — macOS AMFI rejects posix_spawn(POSIX_SPAWN_CLOEXEC_DEFAULT)
+    // on binaries inside a sealed bundle. The backend mirrors node-pty here.
+    if (!isDev) {
+      env.ADE_NATIVE_CACHE_DIR = path.join(app.getPath('userData'), 'native');
+    }
 
-    backendProcess = fork(backendEntry, [], {
-      env,
-      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-    });
+    const nodeBinary = findNodeBinary(env.PATH ?? '');
+    if (nodeBinary) {
+      // Run the backend under a real Node so node-pty's posix_spawn works.
+      // Electron's ELECTRON_RUN_AS_NODE mode inherits the app's macOS signing
+      // entitlements and blocks the spawn-helper launch.
+      console.log(`[electron] Starting backend via ${nodeBinary}`);
+      backendProcess = spawn(nodeBinary, [backendEntry], {
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } else {
+      console.log(`[electron] No system Node found; falling back to fork() (ELECTRON_RUN_AS_NODE)`);
+      backendProcess = fork(backendEntry, [], {
+        env,
+        stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+      });
+    }
 
     let resolved = false;
 

@@ -8,6 +8,7 @@ interface AppConfig {
   maxInstances: number;
   theme: 'dark' | 'light';
   zoom: 100 | 110 | 125 | 150;
+  lastSelectedTaskId?: string | null;
 }
 
 export function useConfig() {
