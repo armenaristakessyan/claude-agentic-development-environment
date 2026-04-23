@@ -9,7 +9,7 @@ import ResizeHandle from './components/ResizeHandle';
 import ChatView from './components/ChatView';
 import TaskChangesPanel from './components/TaskChangesPanel';
 import TerminalPanel from './components/TerminalPanel';
-import CodeSearchModal from './components/CodeSearchModal';
+import QuickOpenModal from './components/QuickOpenModal';
 import ScanPathsModal from './components/ScanPathsModal';
 import LaunchModal from './components/LaunchModal';
 import { useProjects } from './hooks/useProjects';
@@ -45,7 +45,7 @@ export default function App() {
   const { config, updateConfig } = useConfig();
   const { projects, loading: projectsLoading, refreshing: projectsRefreshing, refreshProjects, deleteWorktree } = useProjects();
   const { instances, loading: instancesLoading, spawnInstance, killInstance, refetch: refetchInstances, patchInstance } = useInstances();
-  const { tasks: historyTasks, fetchTasks, removeTask, resumeTask } = useTaskHistory();
+  const { tasks: historyTasks, fetchTasks, removeTask, resumeTask, bumpActivity } = useTaskHistory();
   const { status: rtkStatus, stats: rtkStats, loading: rtkLoading, installing: rtkInstalling, installHooks, uninstallHooks, dismissed: rtkDismissed, dismiss: dismissRtk } = useRtk();
   const [selectedInstanceId, setSelectedInstanceIdRaw] = useState<string | null>(null);
   const [restored, setRestored] = useState(false);
@@ -177,13 +177,24 @@ export default function App() {
       }
     };
 
+    const onTaskActivity = (data: { instanceId: string; lastActivityAt: string }) => {
+      // History (exited tasks) is keyed off lastActivityAt; active instances
+      // live in a separate slice (useInstances) and bucket off lastActivity.
+      // Patch both so the sidebar re-buckets regardless of which section the
+      // task is currently rendered in.
+      bumpActivity(data.instanceId, data.lastActivityAt);
+      patchInstance(data.instanceId, { lastActivity: data.lastActivityAt });
+    };
+
     socket.on('agent:event', onAgentEvent);
     socket.on('chat:rate_limit', onRateLimit);
+    socket.on('task:activity', onTaskActivity);
     return () => {
       socket.off('agent:event', onAgentEvent);
       socket.off('chat:rate_limit', onRateLimit);
+      socket.off('task:activity', onTaskActivity);
     };
-  }, [socket]);
+  }, [socket, bumpActivity, patchInstance]);
 
   const { queue } = useAttentionQueue({ instances });
 
@@ -312,11 +323,11 @@ export default function App() {
       key: 'Meta+n',
       handler: () => setNewTaskOpen(true),
     },
-    // Cmd+Shift+F — code search
+    // Cmd+Shift+F — quick open (files + symbols, VS Code style)
     {
       key: 'Meta+Shift+f',
       handler: () => {
-        if (selectedInstance) setCodeSearchOpen(true);
+        if (selectedInstance) setQuickOpenOpen(true);
       },
       enabled: !!selectedInstance,
     },
@@ -334,7 +345,7 @@ export default function App() {
   const [openFiles, setOpenFiles] = useState<string[]>([]);
   const [activeFileTab, setActiveFileTab] = useState<string | null>(null);
   const [scrollToLine, setScrollToLine] = useState<number | undefined>(undefined);
-  const [codeSearchOpen, setCodeSearchOpen] = useState(false);
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
   const [codeSelection, setCodeSelection] = useState<{ filePath: string; startLine: number; endLine: number; code: string } | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalWidth, setTerminalWidth] = useState(480);
@@ -427,7 +438,7 @@ export default function App() {
     }
   }, [instances, selectedInstanceId]);
 
-  const handleSearchSelect = useCallback((filePath: string, line: number) => {
+  const handleQuickOpenSelect = useCallback((filePath: string, line?: number) => {
     if (!selectedInstance) return;
     const projectPath = selectedInstance.worktreePath ?? selectedInstance.projectPath;
     handleOpenFileViewer(projectPath, selectedInstance.projectName, filePath, line);
@@ -713,11 +724,11 @@ export default function App() {
         />
       )}
 
-      {codeSearchOpen && selectedInstance && (
-        <CodeSearchModal
+      {quickOpenOpen && selectedInstance && (
+        <QuickOpenModal
           projectPath={selectedInstance.worktreePath ?? selectedInstance.projectPath}
-          onSelect={handleSearchSelect}
-          onClose={() => setCodeSearchOpen(false)}
+          onSelect={handleQuickOpenSelect}
+          onClose={() => setQuickOpenOpen(false)}
         />
       )}
     </div>

@@ -87,6 +87,9 @@ interface SpawnOptions {
   permissionMode?: string;
   /** Preserve original creation timestamp when resuming a task */
   createdAt?: Date;
+  /** Preserve persisted last-activity timestamp on resume (without it,
+   *  every auto-resume on backend restart would bump the task to "now"). */
+  lastActivity?: Date;
   /** Previously-approved tools for this task (per-task allowlist) */
   approvedTools?: string[];
   /** Reuse a specific id (used when resuming a persisted task at boot so
@@ -346,7 +349,7 @@ export class StreamProcessManager extends EventEmitter {
       projectName,
       status: INSTANCE_STATUS.WAITING_INPUT,
       createdAt: options.createdAt ?? new Date(),
-      lastActivity: new Date(),
+      lastActivity: options.lastActivity ?? new Date(),
       taskDescription: options.taskDescription ?? null,
       worktreePath: options.worktreePath ?? null,
       parentProjectPath: options.parentProjectPath ?? null,
@@ -431,6 +434,10 @@ export class StreamProcessManager extends EventEmitter {
       }
       instance.messages.push(userMessage);
       this.emit('message', instanceId, userMessage);
+      // Bump last-activity so the history groups by recency of use.
+      this.taskStore?.touchActivity(instanceId).catch(err => {
+        console.log('[stream-process] touchActivity failed:', err);
+      });
     }
 
     // Build the full prompt with context prepended

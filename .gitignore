@@ -7,3 +7,7 @@ dev-dist/
 # Electron
 electron/dist/
 release/
+
+# Local / OS noise
+.DS_Store
+.claude/

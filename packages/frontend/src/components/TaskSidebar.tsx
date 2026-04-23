@@ -50,7 +50,7 @@ const TaskSidebar = React.memo(function TaskSidebar({
   const [confirmKillId, setConfirmKillId] = useState<string | null>(null);
   const [deleteWorktreeChecked, setDeleteWorktreeChecked] = useState(false);
   const [historyHeight, setHistoryHeight] = useState(200);
-  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const dragging = useRef(false);
   const lastY = useRef(0);
   const COLLAPSE_THRESHOLD = 60;
@@ -457,10 +457,10 @@ interface TaskGroup {
   tasks: StoredTask[];
 }
 
-/** Group exited tasks by how long ago they finished (exitedAt, falling back to createdAt). */
+/** Group exited tasks by recency of use (lastActivityAt, falling back to exitedAt, then createdAt). */
 function groupTasksByAge(tasks: StoredTask[]): TaskGroup[] {
   return groupByAge(tasks, t => {
-    const ref = t.exitedAt ?? t.createdAt;
+    const ref = t.lastActivityAt ?? t.exitedAt ?? t.createdAt;
     const ms = ref ? new Date(ref).getTime() : 0;
     return Number.isFinite(ms) ? ms : 0;
   }).map(g => ({ label: g.label, tasks: g.items }));
@@ -471,10 +471,11 @@ interface InstanceGroup {
   instances: Instance[];
 }
 
-/** Group active instances by how long ago they were created. */
+/** Group active instances by recency of use (lastActivity, falling back to createdAt). */
 function groupInstancesByAge(instances: Instance[]): InstanceGroup[] {
   return groupByAge(instances, i => {
-    const ms = i.createdAt ? new Date(i.createdAt).getTime() : 0;
+    const ref = i.lastActivity ?? i.createdAt;
+    const ms = ref ? new Date(ref).getTime() : 0;
     return Number.isFinite(ms) ? ms : 0;
   }).map(g => ({ label: g.label, instances: g.items }));
 }

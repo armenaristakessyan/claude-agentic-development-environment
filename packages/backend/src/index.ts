@@ -15,6 +15,7 @@ import { setupStreamSocketHandlers } from './stream-socket.js';
 import { MarketplaceService } from './marketplace.js';
 import { RtkService } from './rtk-service.js';
 import { ShellTerminalService, setupShellTerminalHandlers } from './shell-terminal.js';
+import { ProjectIndexService } from './project-index.js';
 
 export interface ServerHandle {
   httpServer: HttpServer;
@@ -58,6 +59,7 @@ export async function startServer(options?: { port?: number; staticDir?: string 
   // Services
   const marketplace = new MarketplaceService();
   const rtkService = new RtkService();
+  const projectIndex = new ProjectIndexService();
 
   // Wire plugin discovery into the stream process manager
   streamProcess.setPluginPathsProvider(() => marketplace.getInstalledPluginPaths());
@@ -83,7 +85,7 @@ export async function startServer(options?: { port?: number; staticDir?: string 
 
 
   // Routes
-  const routes = createRoutes(configService, scanner, streamProcess, worktreeManager, taskStore, marketplace, rtkService);
+  const routes = createRoutes(configService, scanner, streamProcess, worktreeManager, taskStore, marketplace, rtkService, projectIndex);
   app.use(routes);
 
   // Serve static frontend files in production/Electron mode
@@ -175,6 +177,7 @@ export async function startServer(options?: { port?: number; staticDir?: string 
           effort: task.effort ?? undefined,
           permissionMode: task.permissionMode ?? undefined,
           createdAt: task.createdAt ? new Date(task.createdAt) : undefined,
+          lastActivity: task.lastActivityAt ? new Date(task.lastActivityAt) : undefined,
           approvedTools: task.approvedTools ?? [],
         });
         console.log(`[server] Resumed task: ${task.taskDescription ?? task.projectName} (${instance.id})`);

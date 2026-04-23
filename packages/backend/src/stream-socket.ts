@@ -53,9 +53,14 @@ export function setupStreamSocketHandlers(
     io.emit('instance:status', { instanceId, status });
   });
 
-  // Forward new messages — scoped to instance room
+  // Forward new messages — scoped to instance room.
+  // User messages also broadcast `task:activity` so the TaskSidebar can
+  // re-bucket the task (Today/Yesterday/…) without refetching the list.
   streamProcess.on('message', (instanceId: string, message: ChatMessage) => {
     io.to(instanceRoom(instanceId)).emit('chat:message', { instanceId, message });
+    if (message.role === 'user') {
+      io.emit('task:activity', { instanceId, lastActivityAt: new Date().toISOString() });
+    }
   });
 
   // Forward real-time content blocks — scoped to instance room

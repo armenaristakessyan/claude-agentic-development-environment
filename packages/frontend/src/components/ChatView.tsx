@@ -33,6 +33,9 @@ interface MentionResult {
   label: string;
   insertText: string;
   ext: string;
+  // When set, the entry is a symbol from the project index. Used to render
+  // the kind badge and the containing-file hint next to the name.
+  symbol?: { kind: string; filePath: string; line: number };
 }
 
 /** Map file extension to a short language label and color.
@@ -959,31 +962,41 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
   const [mentionActive, setMentionActive] = useState(false);
   const mentionSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Debounced search for @ mentions — files only
+  // Debounced search for @ mentions — files + symbols from the shared
+  // project index (same data that powers Quick Open).
   useEffect(() => {
-    if (!mentionActive || !mentionQuery) {
+    if (!mentionActive) {
       setMentionResults([]);
       return;
     }
     if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current);
     mentionSearchTimer.current = setTimeout(async () => {
       try {
-        const q = mentionQuery.toLowerCase();
-        const res = await fetch(`/api/instances/${instanceId}/context/files`);
-        const data = await res.json() as { files: string[] };
-        const results: MentionResult[] = (data.files ?? [])
-          .filter(f => f.toLowerCase().includes(q))
-          .slice(0, 15)
-          .map(f => {
-            const ext = f.split('.').pop() ?? '';
-            return { label: f, insertText: f, ext };
-          });
-        setMentionResults(results);
+        const res = await fetch(`/api/instances/${instanceId}/context/mentions?q=${encodeURIComponent(mentionQuery)}`);
+        if (!res.ok) { setMentionResults([]); return; }
+        const data = await res.json() as {
+          files: { filePath: string }[];
+          symbols: { name: string; kind: string; filePath: string; line: number }[];
+        };
+        const fileResults: MentionResult[] = (data.files ?? []).map(f => ({
+          label: f.filePath,
+          insertText: f.filePath,
+          ext: f.filePath.split('.').pop() ?? '',
+        }));
+        const symbolResults: MentionResult[] = (data.symbols ?? []).map(s => ({
+          label: s.name,
+          // Inserting the file path keeps the downstream attachment logic
+          // working; the symbol is a navigation aid, not a separate entity.
+          insertText: s.filePath,
+          ext: s.filePath.split('.').pop() ?? '',
+          symbol: { kind: s.kind, filePath: s.filePath, line: s.line },
+        }));
+        setMentionResults([...fileResults, ...symbolResults]);
         setMentionIndex(0);
       } catch {
         setMentionResults([]);
       }
-    }, 150);
+    }, 80);
     return () => { if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current); };
   }, [mentionQuery, mentionActive, instanceId]);
 
@@ -1435,9 +1448,10 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
                 <div className="max-h-48 overflow-y-auto py-1">
                   {mentionResults.map((item, i) => {
                     const info = extInfo(item.ext);
+                    const isSymbol = !!item.symbol;
                     return (
                       <button
-                        key={item.insertText}
+                        key={isSymbol ? `sym:${item.symbol!.filePath}:${item.symbol!.line}:${item.label}` : `file:${item.insertText}`}
                         onMouseDown={e => {
                           e.preventDefault();
                           const cursorPos = inputRef.current?.selectionStart ?? input.length;
@@ -1456,6 +1470,12 @@ function ChatView({ instanceId, status, sendRef, initialModel, initialEffort, in
                           {info.lang}
                         </span>
                         <span className="truncate text-[12px] text-secondary">{item.label}</span>
+                        {isSymbol && (
+                          <>
+                            <span className="shrink-0 rounded bg-elevated px-1 py-0.5 text-[9px] uppercase tracking-wide text-faint">{item.symbol!.kind}</span>
+                            <span className="ml-auto truncate text-[10px] text-faint">{item.symbol!.filePath}:{item.symbol!.line}</span>
+                          </>
+                        )}
                       </button>
                     );
                   })}

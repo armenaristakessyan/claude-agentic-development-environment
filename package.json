@@ -1,6 +1,6 @@
 {
   "name": "claude-dashboard",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Agentic Development Environment — orchestrate multiple Claude Code instances",
   "author": "ADE",
   "private": true,

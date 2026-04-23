@@ -12,6 +12,7 @@ interface StoredTask {
   status: 'active' | 'exited';
   createdAt: string;
   exitedAt: string | null;
+  lastActivityAt?: string | null;
   totalCostUsd: number;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -64,7 +65,14 @@ export function useTaskHistory() {
     }
   }, [fetchTasks]);
 
-  return { tasks, fetchTasks, removeTask, resumeTask };
+  // Patch a task's lastActivityAt locally. Called in response to the
+  // `task:activity` socket broadcast so the sidebar re-buckets immediately
+  // without a full refetch.
+  const bumpActivity = useCallback((taskId: string, lastActivityAt: string) => {
+    setTasks(prev => prev.map(t => (t.id === taskId ? { ...t, lastActivityAt } : t)));
+  }, []);
+
+  return { tasks, fetchTasks, removeTask, resumeTask, bumpActivity };
 }
 
 export type { StoredTask };

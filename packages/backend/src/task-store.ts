@@ -19,6 +19,9 @@ interface StoredTask {
   status: 'active' | 'exited';
   createdAt: string;
   exitedAt: string | null;
+  // Last user interaction (message sent). Optional for back-compat: older
+  // records without this field fall back to exitedAt/createdAt downstream.
+  lastActivityAt?: string | null;
   totalCostUsd: number;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -49,6 +52,9 @@ export class TaskStore {
           task.effort ??= null;
           task.permissionMode ??= null;
           task.approvedTools ??= [];
+          // Backfill lastActivityAt from createdAt for records persisted
+          // before the field existed.
+          task.lastActivityAt ??= task.createdAt;
         }
         this.saveSync();
       }
@@ -166,11 +172,22 @@ export class TaskStore {
       ...task,
       status: 'active',
       exitedAt: null,
+      lastActivityAt: task.lastActivityAt ?? task.createdAt,
     });
     // Keep max 50 tasks in history
     if (this.tasks.length > 50) {
       this.tasks = this.tasks.slice(0, 50);
     }
+    await this.save();
+  }
+
+  // Bump lastActivityAt to now. Called whenever the user interacts with a
+  // task (sending a message), so the sidebar can sort by recency of use
+  // rather than creation.
+  async touchActivity(taskId: string): Promise<void> {
+    const task = this.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    task.lastActivityAt = new Date().toISOString();
     await this.save();
   }
 

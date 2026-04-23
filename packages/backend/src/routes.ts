@@ -10,6 +10,8 @@ import type { WorktreeManager } from './worktree-manager.js';
 import type { TaskStore } from './task-store.js';
 import type { MarketplaceService } from './marketplace.js';
 import type { RtkService } from './rtk-service.js';
+import type { ProjectIndexService } from './project-index.js';
+import { fuzzyScore, fuzzyScoreFilename } from './project-index.js';
 
 export function createRoutes(
   configService: ConfigService,
@@ -19,6 +21,7 @@ export function createRoutes(
   taskStore: TaskStore,
   marketplace: MarketplaceService,
   rtk: RtkService,
+  projectIndex: ProjectIndexService,
 ): Router {
   const router = Router();
 
@@ -281,6 +284,53 @@ export function createRoutes(
         const message = err instanceof Error ? err.message : 'Failed to list files';
         res.status(500).json({ error: message });
       }
+    }
+  });
+
+  // @ mention picker: files + symbols for the instance's cwd, drawn from the
+  // same project index as Quick Open so rankings and coverage match.
+  router.get('/api/instances/:id/context/mentions', async (req, res) => {
+    const cwd = getInstanceCwd(req.params.id);
+    if (!cwd) { res.status(404).json({ error: 'Instance not found' }); return; }
+    const query = (req.query.q as string ?? '').trim();
+    const FILE_LIMIT = 10;
+    const SYMBOL_LIMIT = 10;
+
+    try {
+      const [allFiles, allSymbols] = await Promise.all([
+        projectIndex.getFiles(cwd),
+        projectIndex.getSymbols(cwd),
+      ]);
+
+      if (!query) {
+        res.json({
+          files: allFiles.slice(0, FILE_LIMIT).map(filePath => ({ filePath })),
+          symbols: allSymbols.slice(0, SYMBOL_LIMIT),
+        });
+        return;
+      }
+
+      const scoredFiles: { filePath: string; score: number }[] = [];
+      for (const filePath of allFiles) {
+        const s = fuzzyScoreFilename(query, filePath);
+        if (s !== null) scoredFiles.push({ filePath, score: s });
+      }
+      scoredFiles.sort((a, b) => b.score - a.score);
+
+      const scoredSymbols: { sym: typeof allSymbols[number]; score: number }[] = [];
+      for (const sym of allSymbols) {
+        const s = fuzzyScore(query, sym.name);
+        if (s !== null) scoredSymbols.push({ sym, score: s });
+      }
+      scoredSymbols.sort((a, b) => b.score - a.score);
+
+      res.json({
+        files: scoredFiles.slice(0, FILE_LIMIT).map(({ filePath }) => ({ filePath })),
+        symbols: scoredSymbols.slice(0, SYMBOL_LIMIT).map(({ sym }) => sym),
+      });
+    } catch (err) {
+      console.log('[routes] context/mentions failed:', err);
+      res.json({ files: [], symbols: [] });
     }
   });
 
@@ -1035,35 +1085,51 @@ export function createRoutes(
     }
   });
 
-  // Search code across project files
-  router.get('/api/projects/search', (req, res) => {
+  // Quick open: fuzzy filename + symbol search backed by an in-memory index
+  // built via `git ls-files` + a single `rg` pass. TTL'd with
+  // stale-while-revalidate so keystrokes always hit a warm cache.
+  router.get('/api/projects/quick-open', async (req, res) => {
     const projectPath = req.query.path as string;
+    const mode = (req.query.mode === 'symbols' ? 'symbols' : 'files') as 'files' | 'symbols';
     const query = (req.query.q as string ?? '').trim();
     if (!projectPath || !existsSync(projectPath)) {
       res.status(400).json({ error: 'Valid project path is required' });
       return;
     }
-    if (!query) { res.json({ results: [] }); return; }
 
+    const LIMIT = 50;
     try {
-      // Escape special regex chars for literal search, and shell-unsafe chars
-      const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/'/g, "'\\''");
-      const output = execSync(
-        `grep -rn --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist --exclude-dir=build --exclude-dir=__pycache__ --exclude-dir=target --exclude-dir=vendor --exclude-dir=.next --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --include='*.py' --include='*.rs' --include='*.go' --include='*.java' --include='*.rb' --include='*.php' --include='*.swift' --include='*.kt' --include='*.scala' --include='*.c' --include='*.cpp' --include='*.h' --include='*.hpp' --include='*.cs' --include='*.lua' --include='*.ex' --include='*.exs' --include='*.hs' --include='*.ml' --include='*.json' --include='*.yaml' --include='*.yml' --include='*.toml' --include='*.md' --include='*.css' --include='*.scss' --include='*.html' --include='*.sql' --include='*.sh' --include='*.bash' --include='*.zsh' --include='*.proto' --include='*.graphql' --include='*.tf' -i -E '${escaped}' . 2>/dev/null || true`,
-        { cwd: projectPath, encoding: 'utf-8', timeout: 8000, maxBuffer: 1024 * 1024 },
-      );
-      const results = output.trim().split('\n')
-        .filter(Boolean)
-        .slice(0, 100)
-        .map(line => {
-          const match = line.match(/^\.\/(.+?):(\d+):(.+)$/);
-          if (!match) return null;
-          const [, filePath, lineNum, text] = match;
-          return { filePath, line: parseInt(lineNum, 10), text: text.trim().slice(0, 200) };
-        })
-        .filter(Boolean);
-      res.json({ results });
-    } catch {
+      if (mode === 'files') {
+        const files = await projectIndex.getFiles(projectPath);
+        if (!query) {
+          res.json({ results: files.slice(0, LIMIT).map(filePath => ({ filePath })) });
+          return;
+        }
+        const scored: { filePath: string; score: number }[] = [];
+        for (const filePath of files) {
+          const s = fuzzyScoreFilename(query, filePath);
+          if (s !== null) scored.push({ filePath, score: s });
+        }
+        scored.sort((a, b) => b.score - a.score);
+        res.json({ results: scored.slice(0, LIMIT).map(({ filePath }) => ({ filePath })) });
+        return;
+      }
+
+      // symbols
+      const symbols = await projectIndex.getSymbols(projectPath);
+      if (!query) {
+        res.json({ results: symbols.slice(0, LIMIT) });
+        return;
+      }
+      const scored: { sym: typeof symbols[number]; score: number }[] = [];
+      for (const sym of symbols) {
+        const s = fuzzyScore(query, sym.name);
+        if (s !== null) scored.push({ sym, score: s });
+      }
+      scored.sort((a, b) => b.score - a.score);
+      res.json({ results: scored.slice(0, LIMIT).map(({ sym }) => sym) });
+    } catch (err) {
+      console.log('[routes] quick-open failed:', err);
       res.json({ results: [] });
     }
   });
